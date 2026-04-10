@@ -113,6 +113,10 @@ def _init_session_state(config: dict) -> None:
         # Hot-Patching (Section 9.5) — wired to RegexGate in Phase 2
         "custom_block_phrases": "",
 
+        # Gate thresholds — adjustable via sidebar sliders
+        "pii_threshold": 0.7,
+        "token_limit":   512,
+
         # Generation parameters (Section 9.1)
         "temperature": float(gen.get("temperature", 0.7)),
         "top_p": float(gen.get("top_p", 0.9)),
@@ -122,14 +126,30 @@ def _init_session_state(config: dict) -> None:
         # Selected target model — defaults to config.yaml, overridden by the sidebar dropdown
         "target_model": config.get("models", {}).get("target", "llama3"),
 
-        # Phase 2+ — gate modes (pre-initialised to avoid KeyErrors)
-        # Format: {"fast_scan": "AUDIT", "classify": "AUDIT", ...}
+        # Gate modes — populated per-phase as gates are implemented.
+        # Format: {"gate_name": "OFF" | "AUDIT" | "ENFORCE"}
         "gate_modes": {},
     }
 
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
+
+    # Merge in defaults for any newly introduced gates so existing sessions
+    # pick up new keys without losing user-configured values.
+    gate_defaults = {
+        "custom_regex":   "AUDIT",    # Phase 2 — Hot-Patch RegexGate
+        "token_limit":    "ENFORCE",  # Phase 3 — Token budget (zero-ML)
+        "invisible_text": "ENFORCE",  # Phase 3 — Unicode steganography (zero-ML)
+        "fast_scan":      "AUDIT",    # Phase 3 — PII / Secrets scanner
+        "classify":       "AUDIT",    # Phase 3 — Prompt-Guard injection classifier
+        "sensitive_out":  "AUDIT",    # Phase 3 — Output-side PII scan (LLM-generated PII)
+        "malicious_urls": "ENFORCE",  # Phase 3 — Malicious URL detection (output gate)
+        "no_refusal":     "AUDIT",    # Phase 3 — Model refusal detection (output gate)
+        "deanonymize":    "ENFORCE",  # Phase 3 — PII restoration (output gate)
+    }
+    for gate_key, gate_default in gate_defaults.items():
+        st.session_state.gate_modes.setdefault(gate_key, gate_default)
 
 
 # ── Model availability helper ─────────────────────────────────────────────────
@@ -179,10 +199,74 @@ def main() -> None:
         render_first_run(client, missing)
         return
 
+    # ── Build security pipeline ───────────────────────────────────────────────
+    # Rebuilt on every re-run so gate config (phrases, modes) is always current.
+    from core.pipeline import PipelineManager
+    from gates.regex_gate import CustomRegexGate
+    from gates.local_scanners import (
+        TokenLimitGate, InvisibleTextGate,
+        FastScanGate, PromptGuardGate, DeanonymizeGate,
+        SensitiveGate, MaliciousURLsGate, NoRefusalGate,
+    )
+
+    thresholds = config.get("thresholds", {})
+
+    regex_gate = CustomRegexGate(config={
+        "phrases": st.session_state.get("custom_block_phrases", ""),
+    })
+
+    token_limit_gate = TokenLimitGate(config={
+        "limit":         st.session_state.get("token_limit", 512),
+        "encoding_name": "cl100k_base",
+    })
+
+    invisible_text_gate = InvisibleTextGate(config={})
+
+    fast_scan_gate = FastScanGate(config={
+        "scan_pii":      True,
+        "scan_secrets":  True,
+        "pii_threshold": st.session_state.get("pii_threshold", 0.7),
+    })
+
+    classify_gate = PromptGuardGate(config={
+        "threshold":  thresholds.get("prompt_guard_injection", 0.80),
+        "model_name": "protectai/deberta-v3-base-prompt-injection-v2",
+    })
+
+    deanonymize_gate = DeanonymizeGate(config={})
+
+    sensitive_gate = SensitiveGate(config={
+        "pii_threshold": st.session_state.get("pii_threshold", 0.7),
+    })
+
+    malicious_urls_gate = MaliciousURLsGate(config={
+        "threshold": thresholds.get("malicious_urls", 0.5),
+    })
+
+    no_refusal_gate = NoRefusalGate(config={
+        "threshold": thresholds.get("no_refusal", 0.5),
+    })
+
+    pipeline = PipelineManager(
+        client=client,
+        input_gates=[
+            ("custom_regex",   regex_gate),
+            ("token_limit",    token_limit_gate),
+            ("invisible_text", invisible_text_gate),
+            ("fast_scan",      fast_scan_gate),
+            ("classify",       classify_gate),
+        ],
+        output_gates=[
+            ("sensitive_out",  sensitive_gate),      # redact LLM-generated PII
+            ("malicious_urls", malicious_urls_gate), # block malicious URLs
+            ("no_refusal",     no_refusal_gate),     # detect model refusals
+            ("deanonymize",    deanonymize_gate),    # restore user-provided PII last
+            # Phase 4: ("airs_dual", AIRSDualGate(...))
+        ],
+    )
+
     # ── Route: Main chat view ─────────────────────────────────────────────────
-    # Phase 2: pipeline = PipelineManager(config, gate_modes=st.session_state.gate_modes)
-    # Phase 2: render(client, config, pipeline=pipeline)
-    render(client, config)
+    render(pipeline, config)
 
 
 main()

@@ -24,9 +24,11 @@ pytest-asyncio>=0.23.0
 
 # ── Heavy ML / Security Scanners (Phase 3+) ────────────────────────────────────
 # CPU-only PyTorch — must be listed AFTER the extra index so pip resolves correctly.
-# Install with:  pip install -r requirements.txt
+# Install via setup.bat / setup.sh, or manually:
+#   pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch>=2.2.0
+torchvision>=0.17.0
 transformers>=4.40.0
 onnxruntime>=1.18.0
-llm-guard
+llm-guard>=0.3.16

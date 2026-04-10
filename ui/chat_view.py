@@ -25,6 +25,7 @@ import streamlit as st
 
 if TYPE_CHECKING:
     from core.llm_client import OllamaClient
+    from core.pipeline import PipelineManager
 
 # ── Persona presets (from config.yaml Section 9.1) ────────────────────────────
 
@@ -193,19 +194,19 @@ def render_first_run(client: "OllamaClient", missing_models: list[str]) -> None:
 
 # ── Main chat view ─────────────────────────────────────────────────────────────
 
-def render(client: "OllamaClient", config: dict) -> None:
+def render(pipeline: "PipelineManager", config: dict) -> None:
     """Main entry point for the chat interface.
 
-    Called by app.py after Ollama is confirmed available and all required
-    models are present.
+    Called by app.py after Ollama is confirmed available, all required
+    models are present, and the pipeline has been assembled.
     """
-    _render_sidebar(client, config)
-    _render_chat_area(client, config)
+    _render_sidebar(pipeline, config)
+    _render_chat_area(pipeline, config)
 
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 
-def _render_sidebar(client: "OllamaClient", config: dict) -> None:
+def _render_sidebar(pipeline: "PipelineManager", config: dict) -> None:
     with st.sidebar:
         # ── Demo Mode toggle (always visible) ─────────────────────────────────
         demo_mode = st.toggle(
@@ -224,7 +225,7 @@ def _render_sidebar(client: "OllamaClient", config: dict) -> None:
 
         # ── Target model dropdown ──────────────────────────────────────────────
         st.caption("TARGET MODEL")
-        available_models = client.list_models()
+        available_models = pipeline.client.list_models()
 
         if not available_models:
             st.warning("No models found in Ollama.")
@@ -326,15 +327,243 @@ def _render_sidebar(client: "OllamaClient", config: dict) -> None:
 
         st.markdown("---")
 
-        # ── Hot-Patching (RegexGate — Phase 2) ────────────────────────────────
+        # ── Hot-Patching (CustomRegexGate) ────────────────────────────────────
         st.markdown("#### Hot-Patching")
+
+        current_regex_mode = st.session_state.gate_modes.get("custom_regex", "AUDIT")
+        mode_colors = {"OFF": "#888", "AUDIT": "#E0AF68", "ENFORCE": "#F7768E"}
+
+        new_regex_mode = st.radio(
+            "RegexGate mode",
+            options=["OFF", "AUDIT", "ENFORCE"],
+            index=["OFF", "AUDIT", "ENFORCE"].index(current_regex_mode),
+            horizontal=True,
+            label_visibility="collapsed",
+            help=(
+                "OFF: gate skipped.\n"
+                "AUDIT: flags matches in telemetry but never blocks.\n"
+                "ENFORCE: blocks the prompt immediately on any match."
+            ),
+        )
+        if new_regex_mode != current_regex_mode:
+            st.session_state.gate_modes["custom_regex"] = new_regex_mode
+            st.rerun()
+
+        # Coloured mode badge
+        badge_color = mode_colors[new_regex_mode]
+        st.markdown(
+            f"<span style='color:{badge_color};font-size:0.78rem'>"
+            f"● RegexGate — {new_regex_mode}</span>",
+            unsafe_allow_html=True,
+        )
+
         st.session_state.custom_block_phrases = st.text_input(
-            "Custom Block Phrases",
+            "Block Phrases",
             value=st.session_state.custom_block_phrases,
             placeholder="e.g. ignore all previous, jailbreak, DAN",
-            help="Comma-separated phrases. Wires into the RegexGate in Phase 2.",
+            help="Comma-separated, case-insensitive. Checked against the raw user input.",
         )
-        st.caption("⚙️ RegexGate available in Phase 2.")
+
+        st.markdown("---")
+
+        # ── Fast Classifiers (FastScanGate, PromptGuardGate) ──────────────────
+        # ── Input Guardrails (zero-ML) ─────────────────────────────────────────
+        st.markdown("#### Input Guardrails")
+
+        _GUARDRAIL_GATES = [
+            (
+                "token_limit",
+                "Token Limit",
+                (
+                    "Rejects prompts exceeding the token budget (tiktoken, < 1ms).\n"
+                    "Prevents context-exhaustion attacks and oversized injection payloads.\n"
+                    "ENFORCE: blocks oversized prompts before any ML gate runs.\n"
+                    "AUDIT: flags but continues."
+                ),
+            ),
+            (
+                "invisible_text",
+                "Invisible Text",
+                (
+                    "Detects hidden Unicode characters (zero-width, directional overrides, "
+                    "control chars) used in steganography injection attacks (< 1ms).\n"
+                    "ENFORCE: blocks prompts containing invisible characters.\n"
+                    "AUDIT: flags but continues."
+                ),
+            ),
+        ]
+
+        for gate_key, gate_label, gate_help in _GUARDRAIL_GATES:
+            current_gr_mode = st.session_state.gate_modes.get(gate_key, "ENFORCE")
+            new_gr_mode = st.radio(
+                gate_label,
+                options=["OFF", "AUDIT", "ENFORCE"],
+                index=["OFF", "AUDIT", "ENFORCE"].index(current_gr_mode),
+                horizontal=True,
+                help=gate_help,
+            )
+            if new_gr_mode != current_gr_mode:
+                st.session_state.gate_modes[gate_key] = new_gr_mode
+                st.rerun()
+            badge_color = mode_colors[new_gr_mode]
+            st.markdown(
+                f"<span style='color:{badge_color};font-size:0.78rem'>"
+                f"● {gate_key} — {new_gr_mode}</span>",
+                unsafe_allow_html=True,
+            )
+
+            # Token limit slider — shown only for token_limit gate when not OFF
+            if gate_key == "token_limit" and new_gr_mode != "OFF":
+                st.session_state.token_limit = st.slider(
+                    "Max Tokens",
+                    min_value=64,
+                    max_value=4096,
+                    value=int(st.session_state.get("token_limit", 512)),
+                    step=64,
+                    help=(
+                        "Maximum number of tokens allowed in a single prompt.\n"
+                        "Uses cl100k_base (GPT-4 / llama compatible) tokenisation.\n"
+                        "512 is a reasonable default for interactive chat.\n"
+                        "Raise to 2048–4096 if users need to paste large documents."
+                    ),
+                )
+
+        st.markdown("---")
+
+        st.markdown("#### Fast Classifiers")
+
+        _CLASSIFIER_GATES = [
+            (
+                "fast_scan",
+                "FastScan (PII / Secrets)",
+                (
+                    "llm-guard Anonymize + Secrets scanners (CPU/Presidio).\n"
+                    "OFF: skipped entirely.\n"
+                    "AUDIT: masks PII in current_text, logs verdict, pipeline continues.\n"
+                    "ENFORCE: blocks prompt if PII or secrets detected."
+                ),
+            ),
+            (
+                "classify",
+                "PromptGuard (Injection)",
+                (
+                    "Meta Prompt-Guard-86M injection/jailbreak classifier (CPU).\n"
+                    "OFF: skipped entirely.\n"
+                    "AUDIT: logs threat score, pipeline continues regardless.\n"
+                    "ENFORCE: blocks prompt when threat score \u2265 threshold."
+                ),
+            ),
+        ]
+
+        for gate_key, gate_label, gate_help in _CLASSIFIER_GATES:
+            current_clf_mode = st.session_state.gate_modes.get(gate_key, "AUDIT")
+            new_clf_mode = st.radio(
+                gate_label,
+                options=["OFF", "AUDIT", "ENFORCE"],
+                index=["OFF", "AUDIT", "ENFORCE"].index(current_clf_mode),
+                horizontal=True,
+                help=gate_help,
+            )
+            if new_clf_mode != current_clf_mode:
+                st.session_state.gate_modes[gate_key] = new_clf_mode
+                st.rerun()
+            badge_color = mode_colors[new_clf_mode]
+            st.markdown(
+                f"<span style='color:{badge_color};font-size:0.78rem'>"
+                f"● {gate_key} — {new_clf_mode}</span>",
+                unsafe_allow_html=True,
+            )
+
+            # PII confidence threshold slider — shown only for fast_scan
+            if gate_key == "fast_scan" and new_clf_mode != "OFF":
+                st.session_state.pii_threshold = st.slider(
+                    "PII Confidence Threshold",
+                    min_value=0.1,
+                    max_value=1.0,
+                    value=float(st.session_state.get("pii_threshold", 0.7)),
+                    step=0.05,
+                    help=(
+                        "Minimum Presidio confidence score for an entity to be treated as PII.\n"
+                        "Lower = more aggressive (more false positives).\n"
+                        "Higher = more conservative (may miss low-confidence PII).\n"
+                        "0.7 is recommended for general use."
+                    ),
+                )
+
+        st.markdown("---")
+
+        # ── Output Gates ───────────────────────────────────────────────────────
+        st.markdown("#### Output Gates")
+
+        _OUTPUT_GATES = [
+            (
+                "sensitive_out",
+                "Sensitive (LLM-Generated PII)",
+                (
+                    "Scans the model's response for PII the LLM generated on its own.\n"
+                    "Catches hallucinated names, invented phone numbers, or training-data leakage "
+                    "that the input-side FastScan can never see.\n"
+                    "ENFORCE: redacts found PII with placeholders (e.g. [PERSON], [US_SSN]).\n"
+                    "AUDIT: flags in telemetry and redacts, but does not halt the pipeline.\n"
+                    "OFF: gate is skipped entirely."
+                ),
+            ),
+            (
+                "malicious_urls",
+                "Malicious URLs",
+                (
+                    "Scans the model's response for malicious or phishing URLs.\n"
+                    "Catches links the model was tricked into echoing via prompt injection, "
+                    "or hallucinated domains that match known threat patterns.\n"
+                    "ENFORCE (recommended): removes detected URLs from the response.\n"
+                    "AUDIT: flags in telemetry but lets the URL through.\n"
+                    "OFF: gate is skipped entirely."
+                ),
+            ),
+            (
+                "no_refusal",
+                "No Refusal (Refusal Detector)",
+                (
+                    "Detects when the model declines to answer.\n"
+                    "Useful for red-team analysis ('did my attack work?') and "
+                    "over-blocking detection ('is the safety system too aggressive?').\n"
+                    "The model's refusal message is always shown — this gate only flags it.\n"
+                    "AUDIT (recommended): logs refusals as a BLOCK badge in telemetry.\n"
+                    "ENFORCE: additionally surfaces an error banner.\n"
+                    "OFF: gate is skipped entirely."
+                ),
+            ),
+            (
+                "deanonymize",
+                "Deanonymize (PII Restore)",
+                (
+                    "Restores original PII values from placeholders in the LLM response.\n"
+                    "Requires FastScan to be ON and to have detected PII.\n"
+                    "ENFORCE (recommended): always restore — users see real names, not [REDACTED_PERSON_1].\n"
+                    "AUDIT: restores but logs; useful for testing the gate in isolation.\n"
+                    "OFF: placeholders remain visible in the response."
+                ),
+            ),
+        ]
+
+        for gate_key, gate_label, gate_help in _OUTPUT_GATES:
+            current_out_mode = st.session_state.gate_modes.get(gate_key, "ENFORCE")
+            new_out_mode = st.radio(
+                gate_label,
+                options=["OFF", "AUDIT", "ENFORCE"],
+                index=["OFF", "AUDIT", "ENFORCE"].index(current_out_mode),
+                horizontal=True,
+                help=gate_help,
+            )
+            if new_out_mode != current_out_mode:
+                st.session_state.gate_modes[gate_key] = new_out_mode
+                st.rerun()
+            badge_color = mode_colors[new_out_mode]
+            st.markdown(
+                f"<span style='color:{badge_color};font-size:0.78rem'>"
+                f"● {gate_key} — {new_out_mode}</span>",
+                unsafe_allow_html=True,
+            )
 
         st.markdown("---")
 
@@ -347,7 +576,7 @@ def _render_sidebar(client: "OllamaClient", config: dict) -> None:
 
 # ── Main chat area ─────────────────────────────────────────────────────────────
 
-def _render_chat_area(client: "OllamaClient", config: dict) -> None:
+def _render_chat_area(pipeline: "PipelineManager", config: dict) -> None:
     # ── Header ─────────────────────────────────────────────────────────────────
     if st.session_state.demo_mode:
         st.markdown(
@@ -391,32 +620,56 @@ def _render_chat_area(client: "OllamaClient", config: dict) -> None:
 
     st.markdown("---")
 
-    # ── Phase 2 placeholder banner (workbench mode only) ──────────────────────
+    # ── Pipeline status banner (workbench mode only) ──────────────────────────
     if not st.session_state.demo_mode:
-        st.markdown(
-            "<div style='background:#262730;border-left:3px solid #7AA2F7;"
-            "padding:8px 12px;border-radius:4px;margin-bottom:12px;"
-            "font-size:0.82rem;color:#888'>"
-            "🔒 Security Pipeline: <em>not yet active — gates wire in Phase 2</em>"
-            "</div>",
-            unsafe_allow_html=True,
-        )
+        active_gates = [
+            (name, st.session_state.gate_modes.get(name, "AUDIT"))
+            for name, _ in pipeline.input_gates + pipeline.output_gates
+            if st.session_state.gate_modes.get(name, "AUDIT") != "OFF"
+        ]
+        if active_gates:
+            gate_badges = " ".join(
+                f"<span style='background:{_MODE_BG[m]};color:{_MODE_COLOR[m]};"
+                f"padding:1px 7px;border-radius:3px;font-size:0.72rem'>{n}: {m}</span>"
+                for n, m in active_gates
+            )
+            st.markdown(
+                f"<div style='background:#262730;border-left:3px solid #7AA2F7;"
+                f"padding:7px 12px;border-radius:4px;margin-bottom:10px'>"
+                f"🔒 Pipeline active — {gate_badges}</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                "<div style='background:#262730;border-left:3px solid #444;"
+                "padding:7px 12px;border-radius:4px;margin-bottom:10px;"
+                "font-size:0.82rem;color:#555'>"
+                "🔓 All gates OFF — prompts reach the LLM unfiltered</div>",
+                unsafe_allow_html=True,
+            )
 
     # ── Chat history ───────────────────────────────────────────────────────────
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
+            # Blocked assistant turns rendered as errors
+            if msg.get("blocked"):
+                if st.session_state.demo_mode:
+                    st.warning(msg["content"])
+                else:
+                    st.error(msg["content"])
+            else:
+                st.markdown(msg["content"])
 
-            # Token telemetry — workbench mode only, assistant messages only
-            if (
-                msg["role"] == "assistant"
-                and not st.session_state.demo_mode
-            ):
+            if msg["role"] == "assistant" and not st.session_state.demo_mode:
+                # Gate metric badges
+                if msg.get("gate_metrics"):
+                    _render_gate_metrics(msg["gate_metrics"])
+                # Token telemetry
                 t = msg.get("telemetry") or {}
-                if t:
+                if t and not msg.get("blocked"):
                     st.caption(
-                        f"⚡ {t.get('prompt_tokens', 0)} prompt tokens · "
-                        f"{t.get('completion_tokens', 0)} completion tokens · "
+                        f"⚡ {t.get('prompt_tokens', 0)} prompt · "
+                        f"{t.get('completion_tokens', 0)} completion · "
                         f"{t.get('tokens_per_second', 0.0):.1f} t/s"
                     )
 
@@ -428,66 +681,242 @@ def _render_chat_area(client: "OllamaClient", config: dict) -> None:
     )
 
     if prompt := st.chat_input(placeholder):
-        # Add user message to history
+        # 1. Store and display user message
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        # Build API payload
-        messages_for_api = _build_messages()
+        gate_modes = st.session_state.gate_modes
         options = _build_options()
 
-        # Generate response (streaming)
+        # 2. Run input gates (fast — microseconds for regex, ms for ML gates)
+        payload = pipeline.run_input_gates(prompt, gate_modes)
+
         with st.chat_message("assistant"):
-            try:
-                full_response: str = st.write_stream(
-                    client.generate_stream(messages_for_api, options)
-                )
-                result = client.get_stream_result()
+            if payload.is_blocked:
+                # ── Pipeline halted by ENFORCE gate ───────────────────────────
+                if st.session_state.demo_mode:
+                    full_response = "I cannot fulfill this request due to security policies."
+                    st.warning(full_response)
+                else:
+                    blocking_gate = next(
+                        (m["gate_name"] for m in reversed(payload.metrics)
+                         if m.get("verdict") == "BLOCK"),
+                        "unknown gate",
+                    )
+                    full_response = (
+                        f"🚫 **Blocked by `{blocking_gate}`**\n\n"
+                        f"{payload.block_reason}"
+                    )
+                    st.error(full_response)
+                    _render_gate_metrics(payload.metrics)
 
-            except Exception as exc:  # noqa: BLE001
-                err_msg = (
-                    "_Generation failed — check that Ollama is running and the "
-                    f"target model `{client.model}` is available._"
-                )
-                st.error(f"Ollama error: {exc}", icon="🔌")
-                full_response = err_msg
-                result = None
+                stream_result = None
 
-            # Token telemetry (workbench mode only)
-            if result and not st.session_state.demo_mode:
-                st.caption(
-                    f"⚡ {result.prompt_tokens} prompt tokens · "
-                    f"{result.completion_tokens} completion tokens · "
-                    f"{result.tokens_per_second:.1f} t/s"
-                )
+            else:
+                # 3. Stream inference (input gates passed or were AUDIT-only)
+                messages_for_api = _build_messages(payload.current_text)
 
-        # Persist to session state
+                # Use st.empty() so output gates (e.g. Deanonymize) can replace
+                # the streamed text with the restored version after the stream ends.
+                stream_container = st.empty()
+                try:
+                    with stream_container:
+                        full_response = st.write_stream(
+                            pipeline.client.generate_stream(messages_for_api, options)
+                        )
+                    stream_result = pipeline.client.get_stream_result()
+
+                except Exception as exc:  # noqa: BLE001
+                    full_response = (
+                        "_Generation failed — check that Ollama is running and "
+                        f"the target model `{pipeline.client.model}` is available._"
+                    )
+                    st.error(f"Ollama error: {exc}", icon="🔌")
+                    stream_result = None
+
+                if stream_result:
+                    payload.output_text = full_response
+                    payload.prompt_tokens = stream_result.prompt_tokens
+                    payload.completion_tokens = stream_result.completion_tokens
+                    payload.tokens_per_second = stream_result.tokens_per_second
+
+                # 4. Run output gates on the completed response
+                payload = pipeline.run_output_gates(payload, gate_modes)
+
+                # If an output gate modified the text (e.g. Deanonymize restored PII),
+                # replace the streamed content with the corrected version.
+                if stream_result and payload.output_text != full_response:
+                    stream_container.markdown(payload.output_text)
+                    full_response = payload.output_text
+
+                if payload.is_blocked:
+                    if st.session_state.demo_mode:
+                        st.warning("I cannot fulfill this request due to security policies.")
+                    else:
+                        blocking_gate = next(
+                            (m["gate_name"] for m in reversed(payload.metrics)
+                             if m.get("verdict") == "BLOCK"),
+                            "unknown gate",
+                        )
+                        st.error(
+                            f"🚫 **Output blocked by `{blocking_gate}`:** "
+                            f"{payload.block_reason}"
+                        )
+
+                # 5. Redaction notices — input-side and output-side PII events
+                if not st.session_state.demo_mode:
+                    fast_scan_block = next(
+                        (m for m in payload.metrics
+                         if m.get("gate_name") == "fast_scan"
+                         and m.get("verdict") == "BLOCK"),
+                        None,
+                    )
+                    if fast_scan_block:
+                        st.warning(
+                            f"**PII detected, masked, and transparently restored** — "
+                            f"{fast_scan_block['detail']}  \n"
+                            "The LLM never saw your real data: placeholders (e.g. `[REDACTED_PERSON_1]`) "
+                            "were sent in place of the original values. "
+                            "The response you see above has had those placeholders silently swapped back — "
+                            "no `[REDACTED_*]` tags visible, your original values intact.",
+                            icon="🛡️",
+                        )
+
+                    sensitive_block = next(
+                        (m for m in payload.metrics
+                         if m.get("gate_name") == "sensitive_out"
+                         and m.get("verdict") == "BLOCK"),
+                        None,
+                    )
+                    if sensitive_block:
+                        st.warning(
+                            f"**LLM-generated PII detected and redacted** — "
+                            f"{sensitive_block['detail']}  \n"
+                            "The model's response contained PII it produced on its own — "
+                            "not from your input. Sensitive entities have been replaced with "
+                            "type placeholders (e.g. `[PERSON]`, `[US_SSN]`) in the response above.",
+                            icon="🔍",
+                        )
+
+                    malicious_url_block = next(
+                        (m for m in payload.metrics
+                         if m.get("gate_name") == "malicious_urls"
+                         and m.get("verdict") == "BLOCK"),
+                        None,
+                    )
+                    if malicious_url_block:
+                        st.error(
+                            "**Malicious URL detected and removed** — "
+                            "A URL in the model's response was classified as malicious or a phishing attempt. "
+                            "It has been replaced with `[REDACTED_URL]` in the response above.  \n"
+                            f"*Reason: {malicious_url_block['detail']}*",
+                            icon="⛔",
+                        )
+
+                    no_refusal_block = next(
+                        (m for m in payload.metrics
+                         if m.get("gate_name") == "no_refusal"
+                         and m.get("verdict") == "BLOCK"),
+                        None,
+                    )
+                    if no_refusal_block:
+                        st.info(
+                            f"**Model declined to answer** — "
+                            f"{no_refusal_block['detail']}  \n"
+                            "The refusal detector fired. In a red-team context this means the "
+                            "model's safety training held. In a production context it may indicate "
+                            "an over-restrictive safety policy.",
+                            icon="🤚",
+                        )
+
+                # 6. Telemetry (workbench mode only)
+                if not st.session_state.demo_mode:
+                    _render_gate_metrics(payload.metrics)
+                    if stream_result:
+                        st.caption(
+                            f"⚡ {payload.prompt_tokens} prompt · "
+                            f"{payload.completion_tokens} completion · "
+                            f"{payload.tokens_per_second:.1f} t/s"
+                        )
+
+        # 6. Persist to session state — use payload.output_text so any output-gate
+        #    modifications (e.g. Deanonymize) are stored in history, not the raw stream.
         st.session_state.messages.append({
             "role": "assistant",
-            "content": full_response,
+            "content": payload.output_text if payload.output_text else full_response,
+            "blocked": payload.is_blocked,
+            "gate_metrics": payload.metrics,
             "telemetry": {
-                "prompt_tokens": result.prompt_tokens if result else 0,
-                "completion_tokens": result.completion_tokens if result else 0,
-                "tokens_per_second": result.tokens_per_second if result else 0.0,
+                "prompt_tokens": payload.prompt_tokens,
+                "completion_tokens": payload.completion_tokens,
+                "tokens_per_second": payload.tokens_per_second,
             },
         })
 
 
+# ── Semantic colour maps (Section 9.6) ────────────────────────────────────────
+
+_VERDICT_COLOR: dict[str, str] = {
+    "PASS":  "#9ECE6A",   # green
+    "BLOCK": "#F7768E",   # red
+    "AUDIT": "#E0AF68",   # amber  (BLOCK verdict in AUDIT mode)
+    "ERROR": "#E0AF68",   # amber
+    "SKIP":  "#555566",   # dim
+}
+
+_MODE_COLOR: dict[str, str] = {
+    "OFF":     "#555566",
+    "AUDIT":   "#E0AF68",
+    "ENFORCE": "#F7768E",
+}
+
+_MODE_BG: dict[str, str] = {
+    "OFF":     "#55556620",
+    "AUDIT":   "#E0AF6820",
+    "ENFORCE": "#F7768E20",
+}
+
+
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
-def _build_messages() -> list[dict]:
+def _render_gate_metrics(metrics: list[dict]) -> None:
+    """Render coloured verdict badges for each gate that ran."""
+    if not metrics:
+        return
+    badges = ""
+    for m in metrics:
+        verdict = m.get("verdict", "?")
+        color = _VERDICT_COLOR.get(verdict, "#888")
+        gate = m.get("gate_name", "?")
+        latency = m.get("latency_ms", 0.0)
+        detail = m.get("detail", "")
+        clean = detail.replace("\r", "").replace("\n", " ").strip()
+        if len(clean) > 300:
+            clean = clean[:297] + "..."
+        title = clean.replace("&", "&amp;").replace('"', "&quot;").replace("'", "&#39;")
+        badges += (
+            f'<span title="{title}" style="'
+            f"background:{color}18;color:{color};"
+            f"border:1px solid {color}44;padding:1px 8px;"
+            f'border-radius:4px;font-size:0.73rem;margin-right:5px">'
+            f"{gate}: {verdict} ({latency:.1f}ms)</span>"
+        )
+    st.markdown(badges, unsafe_allow_html=True)
+
+
+def _build_messages(current_text: str | None = None) -> list[dict]:
     """Assemble the full message list for the Ollama chat API.
 
-    Combines system prompt, RAG context, and conversation history.
-    The most recent user message is the last entry in
-    ``st.session_state.messages`` (added by the caller before this runs).
+    Args:
+        current_text: The (possibly gate-modified) user turn to use as the
+                      final user message.  If ``None``, the raw last message
+                      in session_state is used unchanged.
     """
     system_parts: list[str] = []
 
     if st.session_state.system_prompt.strip():
         system_parts.append(st.session_state.system_prompt.strip())
-
     if st.session_state.get("rag_context", "").strip():
         system_parts.append(
             f"## Context Document:\n{st.session_state.rag_context.strip()}"
@@ -497,8 +926,16 @@ def _build_messages() -> list[dict]:
     if system_parts:
         messages.append({"role": "system", "content": "\n\n".join(system_parts)})
 
-    for msg in st.session_state.messages:
-        messages.append({"role": msg["role"], "content": msg["content"]})
+    if current_text is not None:
+        # Use all history except the last user message, then append current_text.
+        # This ensures gate-modified text (e.g. PII-masked) reaches the LLM
+        # rather than the original raw input.
+        for msg in st.session_state.messages[:-1]:
+            messages.append({"role": msg["role"], "content": msg["content"]})
+        messages.append({"role": "user", "content": current_text})
+    else:
+        for msg in st.session_state.messages:
+            messages.append({"role": msg["role"], "content": msg["content"]})
 
     return messages
 

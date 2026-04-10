@@ -10,8 +10,8 @@
 * **Frontend & Web Framework:** `Streamlit` (utilizing `st.session_state` for state management and `st.fragment` for non-blocking iterative UI updates).
 * **LLM Inference Engine:** `Ollama` (Running locally. **Constraint:** Must use a single Ollama instance and rely on internal queuing to prevent VRAM Out-Of-Memory crashes).
 * **Security Tooling (Mapped to Gates):**
-    * **Protect.ai `llm-guard`:** Python library for fast, transformer/regex-based input/output scanning.
-    * **Meta `Prompt-Guard-86M`:** Fast injection classifier loaded locally via Hugging Face `transformers` (optimized for CPU/ONNX).
+    * **Protect.ai `llm-guard` (≥0.3.16):** Python library providing 15 input scanners and 21 output scanners for fast, transformer/regex-based input/output scanning. See Section 3.3 for the full scanner inventory.
+    * **ProtectAI `deberta-v3-base-prompt-injection-v2`:** Fast binary injection classifier (SAFE / INJECTION) loaded locally via Hugging Face `transformers` (CPU). Publicly accessible — no gated HuggingFace account required.
     * **Meta `llama-guard3`:** Safety moderation LLM, executed locally via `Ollama`.
     * **Semantic-Guard (Custom):** An LLM-as-a-judge intent classifier (using smaller models like `phi3` or `tinyllama` via `Ollama`).
     * **`little-canary`:** Python library for behavioral and structural injection probing.
@@ -41,16 +41,96 @@ class PipelinePayload:
 ### 3.2 The Pipeline Sequence
 If a prompt fails at any gate (and the gate is in `ENFORCE` mode), execution halts and returns a refusal template.
 
-| Stage | Gate Name | Tool / Execution | Primary Defense Target |
+**Input Chain**
+
+| Stage | Gate Key | Tool / Scanner | Primary Defense Target | Status |
+| :--- | :--- | :--- | :--- | :--- |
+| **Gate 0** | `custom_regex` | `CustomRegexGate` (pure Python) | WAF hot-patch keyword/regex blocklist | ✅ Done |
+| **Gate 1a** | `fast_scan` | `llm-guard`: `Anonymize` + `Secrets` | PII redaction, credential detection | ✅ Done |
+| **Gate 1b** | `token_limit` | `llm-guard`: `TokenLimit` (tiktoken) | Oversized prompt rejection | ✅ Done |
+| **Gate 1c** | `invisible_text` | `llm-guard`: `InvisibleText` | Unicode steganography / hidden chars | ✅ Done |
+| **Gate 1d** | `toxicity_in` | `llm-guard`: `Toxicity` + `Sentiment` | Hostile / abusive input tone | Phase 3+ |
+| **Gate 1e** | `ban_topics` | `llm-guard`: `BanTopics` | Off-limits subject matter (zero-shot) | Phase 3+ |
+| **Gate 2** | `classify` | `deberta-v3-base-prompt-injection-v2` | Fast injection/jailbreak classification | ✅ Done |
+| **Gate 3** | `mod_llm` | `Llama-Guard-3` (Ollama) | Detailed safety taxonomies (LLM judge) | Phase 4 |
+| **Gate 4** | `airs_inlet` | Prisma AIRS (Cloud API) | Enterprise injection + malicious URL | Phase 4 |
+
+**Inference**
+
+| Stage | | Tool | |
 | :--- | :--- | :--- | :--- |
-| **Gate 1** | `Fast-Scan` | `llm-guard` (CPU/ONNX) | PII, Secret Detection, Regex |
-| **Gate 2** | `Classify` | `Prompt-Guard` (CPU) | Fast Injection/Jailbreak ID |
-| **Gate 3** | `Mod-LLM` | `Llama-Guard-3` (Ollama) | Detailed Safety Taxonomies |
-| **Gate 4** | `AIRS-Inlet` | **Prisma AIRS** (Cloud API) | Enterprise-grade injection/mal-URL |
-| **Target** | **Inference** | **Target LLM** (Ollama) | Main Generation Task |
-| **Gate 5** | `Structure` | `little-canary` (Python) | Behavioral/JSON integrity checks |
-| **Gate 6** | `Final-Check` | `llm-guard` (CPU/ONNX) | Refusal check & PII Unmasking |
-| **Gate 7** | `AIRS-Dual` | **Prisma AIRS** (Cloud API) | Output validation/Malware/DLP |
+| **Target** | **Inference** | **Target LLM** (Ollama) | Main generation task |
+
+**Output Chain**
+
+| Stage | Gate Key | Tool / Scanner | Primary Defense Target | Status |
+| :--- | :--- | :--- | :--- | :--- |
+| **Gate A** | `deanonymize` | `llm-guard`: `Deanonymize` (Vault) | Restore PII placeholders → real values | ✅ Done |
+| **Gate B** | `sensitive_out` | `llm-guard`: `Sensitive` (Presidio) | PII that the LLM generated itself | ✅ Done |
+| **Gate C** | `malicious_urls` | Heuristic layer + `llm-guard`: `MaliciousURLs` | Dangerous/phishing links in responses | ✅ Done |
+| **Gate D** | `no_refusal` | `llm-guard`: `NoRefusal` | Detects model refusals (red-team + over-blocking) | ✅ Done |
+| **Gate E** | `bias_toxicity` | `llm-guard`: `Bias` + `Toxicity` | Biased or abusive model output | Phase 3+ |
+| **Gate F** | `relevance` | `llm-guard`: `Relevance` (BAAI embeddings) | Off-topic / hallucinated responses | Phase 3+ |
+| **Gate G** | `structure` | `little-canary` (Python) | Behavioral/JSON integrity probes | Phase 5 |
+| **Gate H** | `airs_dual` | Prisma AIRS (Cloud API) | Output DLP + malware scanning | Phase 4 |
+
+### 3.3 llm-guard Full Scanner Inventory
+
+All scanners return `(sanitized_text, is_valid, risk_score: float 0–1)`. They are CPU-viable but latency varies significantly.
+
+**Input Scanners (15 total)**
+
+| Scanner | Catches | Model / Method | CPU Latency |
+|:--------|:--------|:---------------|:------------|
+| `Anonymize` | PII (names, emails, SSN, IBAN, crypto) | Presidio NER + regex | 1–3 s |
+| `BanCode` | Code submission | Language ID model | 100–500 ms |
+| `BanCompetitors` | Competitor mentions | NER + list | 100–500 ms |
+| `BanSubstrings` | Exact phrases | String match | < 1 ms |
+| `BanTopics` | Off-limits subjects | Zero-shot (roberta-base-c-v2) | 500 ms–2 s |
+| `Code` | Code snippets (25+ languages) | Language ID model | 100–500 ms |
+| `Gibberish` | Nonsensical input | HuggingFace classifier | 100–500 ms |
+| `InvisibleText` | Hidden Unicode chars | Unicode category analysis | < 1 ms |
+| `Language` | Enforces input language | xlm-roberta | 100–500 ms |
+| `PromptInjection` | Injection/jailbreak | deberta-v3-base-prompt-injection-v2 | 500 ms–2 s |
+| `Regex` | Custom patterns | User-defined regex | < 1 ms |
+| `Secrets` | API keys, credentials | detect-secrets (regex + entropy) | 1–10 ms |
+| `Sentiment` | Negative/hostile tone | HuggingFace classifier | 100–500 ms |
+| `TokenLimit` | Input length | tiktoken | < 1 ms |
+| `Toxicity` | Abusive language | HuggingFace classifier | 100–500 ms |
+
+**Output Scanners (21 total — includes mirrors of input scanners plus these unique ones)**
+
+| Scanner | Catches | Model / Method | CPU Latency |
+|:--------|:--------|:---------------|:------------|
+| `Bias` | Biased content | distilroberta-bias | 100–500 ms |
+| `Deanonymize` | Restores PII from Vault | Vault lookup (in-memory) | < 1 ms |
+| `FactualConsistency` | Response vs context accuracy | Embedding similarity | 500 ms–2 s |
+| `JSON` | Validates / repairs JSON output | Schema + json-repair | < 1 ms |
+| `LanguageSame` | Output language matches input | xlm-roberta | 100–500 ms |
+| `MaliciousURLs` | Dangerous links in response | codebert-base-Malicious_URLs | 500 ms–2 s |
+| `NoRefusal` | Model complied with attack | distilroberta-base-rejection-v1 | 100–500 ms |
+| `ReadingTime` | Response too long | Word count heuristic | < 1 ms |
+| `Relevance` | Off-topic responses | BAAI/bge-base-en-v1.5 embeddings | 500 ms–2 s |
+| `Sensitive` | PII in LLM output | Presidio Analyzer | 1–3 s |
+| `URLReachability` | Validates links are live | HTTP status check | network-dependent |
+
+**ONNX Optimisation:** Installing `llm-guard[onnxruntime]` reduces transformer model latency by 50–70% on CPU. Recommended for all Phase 3+ gates.
+
+### 3.4 Vault Architecture (PII De-anonymisation)
+
+The `Vault` is a session-scoped in-memory map that makes PII anonymisation reversible across the input→LLM→output boundary:
+
+```
+User input:   "My name is Alice Smith, email alice@example.com"
+  ↓ Anonymize (Gate 1a)
+To LLM:       "My name is [REDACTED_PERSON_1], email [REDACTED_EMAIL_1]"
+  ↓ LLM responds using placeholders
+LLM output:   "Hello [REDACTED_PERSON_1], I've noted [REDACTED_EMAIL_1]"
+  ↓ Deanonymize (Gate A)
+To user:      "Hello Alice Smith, I've noted alice@example.com"
+```
+
+The `Deanonymize` output gate (Gate A) must share the same `Vault` instance as `Anonymize` (Gate 1a). The `Vault` is initialised once per conversation and passed into both gate constructors. **Gate A is not yet wired** — without it, placeholder text leaks into user-visible responses (known issue, Phase 3+).
 
 ## 4. Proposed File Structure
 ```text
@@ -86,10 +166,11 @@ llm-sec-workbench/
 ├── gates/                  # The "Chain of Responsibility" implementations
 │   ├── __init__.py
 │   ├── base_gate.py        # Abstract base class: SecurityGate with try/except wrappers
-│   ├── local_scanners.py   # Gate 1 & 2 (LLM-Guard, Prompt-Guard)
-│   ├── ollama_gates.py     # Gate 4 & Custom Semantic (Llama-Guard)
-│   ├── airs_gate.py        # Gate 3 & 5 (Palo Alto API calls)
-│   └── output_gates.py     # Gate 6 & 7 (Canary, Output Validation)
+│   ├── regex_gate.py       # Gate 0: CustomRegexGate (hot-patch keyword/regex blocklist) ✅
+│   ├── local_scanners.py   # Gates 1a–1e & 2: llm-guard input scanners + deberta classifier ✅ (partial)
+│   ├── output_scanners.py  # Gates A–F: llm-guard output scanners (Deanonymize, Sensitive, NoRefusal, etc.)
+│   ├── ollama_gates.py     # Gate 3: Llama-Guard-3 (Ollama-hosted safety LLM)
+│   └── airs_gate.py        # Gates 4 & H: Prisma AIRS cloud API (inlet + dual)
 │
 ├── tests/
 │   ├── __init__.py
@@ -143,7 +224,20 @@ class SecurityGate(ABC):
 * **Phase 0.5 (Database, Testing & Deployment):** Implement a lightweight SQLite logger (`core/db_logger.py`) that automatically saves finalized `PipelinePayload` objects to a local `.sqlite` file. Create the `tests/` directory with basic `pytest` functions. Create the `Dockerfile` and `docker-compose.yml`. **Crucial:** Write a `start.bat` and `start.sh` script that automatically copies `.env.example` to `.env`, runs `docker-compose up`, and opens the browser to `localhost:8501` to make setup frictionless for non-developers.
 * **Phase 1 (Foundation & Chat UI):** Setup `requirements.txt` and `app.py`. In `core/llm_client.py`, create an abstract base class (`BaseLLMClient`) with a `generate()` method to future-proof for cloud APIs, then implement `OllamaClient` as the first concrete subclass. Implement the Chat UI, including the expandable "System Context / RAG Document" text area (Section 9.5). **Crucial:** Build a "First Run" loading screen in Streamlit that clearly displays the download progress when running `ollama pull` for the required models on startup, so users know the app isn't frozen.
 * **Phase 2 (Pipeline & Hot-Patching):** Implement `core/payload.py`, `core/pipeline.py`, and `gates/base_gate.py`. Build the `CustomRegexGate` for the Hot-Patching feature (Section 9.5) to establish the pipeline flow before adding heavy AI models.
-* **Phase 3 (Fast Local Classifiers):** Implement `local_scanners.py`. Force `PromptGuardGate` and `LLM-Guard` to execute via ONNX/CPU to reserve GPU VRAM. Ensure each gate logs its raw JSON to `payload.raw_traces` for the future API Inspector.
+* **Phase 3 (Fast Local Classifiers — llm-guard Full Suite):** Expand `local_scanners.py` and create `output_scanners.py`. The full Phase 3 scope, in priority order:
+  1. **Gate A `Deanonymize`** — highest priority: wire the `Vault` through `Anonymize`→`Deanonymize` so PII placeholders are restored in the user-visible response instead of leaking as `[REDACTED_PERSON_1]`.
+  2. **Gate 1b `TokenLimit`** — zero-ML, add immediately: reject oversized prompts before they reach heavier gates.
+  3. **Gate 1c `InvisibleText`** — zero-ML, add immediately: catches Unicode steganography attacks.
+  4. **Gate B `Sensitive`** — output-side Presidio scan: catches PII that the LLM generates itself (not just echoing user input).
+  5. **Gate C `MaliciousURLs`** — output gate: scan LLM responses for dangerous links.
+  6. **Gate D `NoRefusal`** — output gate: flag when the model *complied* with an attack (jailbreak succeeded but ENFORCE gates were in AUDIT).
+  7. **Gate 1d `Toxicity`/`Sentiment`** — input gates: block hostile prompts before inference.
+  8. **Gate E `Bias`/`Toxicity`** — output gates: quality gates on model responses.
+  9. **Gate F `Relevance`** — output gate: BAAI embedding similarity check for off-topic responses.
+  10. **Gate 1e `BanTopics`** — input gate: zero-shot topic restriction (slowest of the batch, add last).
+  * Force all transformer-based scanners to CPU (`device="cpu"`). Add `llm-guard[onnxruntime]` to `requirements.txt` for 50–70% latency reduction.
+  * Each gate must log its raw JSON to `payload.raw_traces` for the API Inspector.
+  * The shared `Vault` instance must be created once per pipeline rebuild and passed to both `Anonymize` (input) and `Deanonymize` (output).
 * **Phase 4 (LLM & Cloud Gates):** Implement `ollama_gates.py` and `airs_gate.py`. Include a configurable timeout (e.g., 2-3 seconds) for Prisma AIRS API calls to ensure fail-open reliability.
 * **Phase 5 (Workspace & Observability):** Finalize `ui/metrics_panel.py`. Build the tabbed "API Inspector" expander. Implement the `@st.fragment` hardware memory polling (VRAM/RAM), the Persona/Parameter controls, and wire up the `demo_mode` Clean UI toggle.
 * **Phase 6 (Static Fuzzing & Importers):** Implement `redteam/static_runner.py`. Build the UI for `.jsonl` Garak file uploads and the JailbreakBench GitHub fetcher. Implement the Markdown/JSON report export buttons.
@@ -286,7 +380,9 @@ sqlalchemy
 ## 11. Reference Materials & Inspiration for the Agent
 When implementing the features above, rely on the APIs, concepts, and architectural patterns of the following open-source projects. Do not clone these repositories directly unless instructed; use them via `pip install` or as conceptual models for your code.
 
-* **Pipeline & Scanners:** `protectai/llm-guard` (Use for Gate 1 and Gate 6. Rely on its standard InputScanners and OutputScanners).
-* **Meta Security Models:** `meta-llama/Prompt-Guard-86M` (Use the HuggingFace `transformers` library to implement Gate 2).
-* **Behavioral Probes:** `protectai/little-canary` (Conceptual reference for Gate 5 structural evaluation).
+* **Pipeline & Scanners:** `protectai/llm-guard` (≥0.3.16). Use its `InputScanner` and `OutputScanner` base classes for Gates 1a–1e and A–F. See Section 3.3 for the full scanner inventory and CPU latency expectations.
+* **Injection Classifier:** `protectai/deberta-v3-base-prompt-injection-v2` — Gate 2. Binary SAFE/INJECTION classifier. Publicly accessible, no HuggingFace token required.
+* **PII De-anonymisation:** `llm_guard.vault.Vault` + `llm_guard.output_scanners.Deanonymize` — must share the same `Vault` instance as `Anonymize` (Gate 1a). See Section 3.4.
+* **Behavioral Probes:** `protectai/little-canary` (Conceptual reference for Gate G structural evaluation).
+* **ONNX Acceleration:** `pip install llm-guard[onnxruntime]` — reduces CPU inference latency 50–70% for all transformer-based scanners.
 * **Dynamic Red Teaming (PAIR Algorithm):** Model the iterative loop after the "Jailbreaking Black Box Large Language Models in Twenty Queries" (Chao et al., 2023) paper. The Attacker LLM should evaluate the Target's response and output a JSON object containing `{"thought": "...", "next_prompt": "..."}`.
