@@ -1,0 +1,40 @@
+services:
+
+  workbench:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: llm-sec-workbench:latest
+    container_name: llm-sec-workbench
+
+    ports:
+      - "8501:8501"
+
+    # Load all environment variables from the local .env file.
+    # The .env file is NOT baked into the image — it is injected at runtime only.
+    env_file:
+      - .env
+
+    # Persist the SQLite database and any exported reports across container restarts.
+    volumes:
+      - workbench_data:/app/data
+      - ./workbench.sqlite:/app/workbench.sqlite
+
+    # Ollama runs on the host machine (not in Docker). extra_hosts adds
+    # host.docker.internal on Linux, which Docker Desktop provides automatically
+    # on Mac and Windows.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  workbench_data:
+    driver: local

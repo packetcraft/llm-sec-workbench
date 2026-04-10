@@ -1,0 +1,104 @@
+# ── Environment & Secrets ──────────────────────────────────────────────────────
+.env
+*.env
+!.env.example
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+build/
+dist/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ── Virtual Environments ──────────────────────────────────────────────────────
+venv/
+env/
+ENV/
+.venv/
+.env/
+pyenv/
+
+# ── Jupyter ───────────────────────────────────────────────────────────────────
+.ipynb_checkpoints
+*.ipynb
+
+# ── Testing & Coverage ────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+
+# ── Type Checking ─────────────────────────────────────────────────────────────
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyright/
+
+# ── Streamlit ─────────────────────────────────────────────────────────────────
+.streamlit/secrets.toml
+
+# ── Machine Learning / Model Artifacts ────────────────────────────────────────
+*.gguf
+*.bin
+*.safetensors
+*.onnx
+*.pt
+*.pth
+models/
+huggingface_cache/
+.cache/
+
+# ── Database / Persistence ────────────────────────────────────────────────────
+*.sqlite
+*.sqlite3
+*.db
+
+# ── Reports & Exports ─────────────────────────────────────────────────────────
+export.md
+export*.json
+redteam_reports/
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── OS / Editor ───────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ── Docker ────────────────────────────────────────────────────────────────────
+.dockerignore
+
+# ── Claude Code ───────────────────────────────────────────────────────────────
+.claude/
+
+# ── Misc ──────────────────────────────────────────────────────────────────────
+*.bak
+*.orig

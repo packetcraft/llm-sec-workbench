@@ -1,0 +1,74 @@
+# LLM Security Workbench — Runtime Configuration
+# ──────────────────────────────────────────────────────────────────────────────
+# Sensitive values (API keys, Ollama host) belong in .env, not here.
+# This file controls model selection, gate defaults, and AIRS profile settings.
+# ──────────────────────────────────────────────────────────────────────────────
+
+models:
+  # Primary chat / inference model
+  target: "llama3"
+  # Attacker and Defender LLM used in dynamic PAIR red teaming
+  attacker: "phi3"
+  # Safety moderation LLM (Gate 3)
+  safety: "llama-guard3"
+
+gates:
+  # Default mode for each gate on startup: OFF | AUDIT | ENFORCE
+  fast_scan:    AUDIT
+  classify:     AUDIT
+  mod_llm:      AUDIT
+  airs_inlet:   OFF
+  structure:    AUDIT
+  final_check:  AUDIT
+  airs_dual:    OFF
+
+thresholds:
+  # Minimum score (0.0–1.0) before a gate flags a violation
+  prompt_guard_injection: 0.80
+  llm_guard_pii:          0.70
+  llm_guard_secrets:      0.90
+  semantic_guard:         0.75
+
+palo_alto_airs:
+  # API key is loaded from PANW_API_KEY environment variable — do not set here.
+  profile_name: "workbench-default"
+  app_id:       "llm-sec-workbench-local"
+  region:       "us-east-1"
+  # Maximum seconds to wait for an AIRS API response before failing open.
+  timeout_seconds: 3
+
+generation:
+  # Default LLM generation parameters (overridable from the UI sidebar)
+  temperature:    0.7
+  top_p:          0.9
+  top_k:          40
+  repeat_penalty: 1.1
+  # Maximum tokens to generate per response
+  max_tokens:     2048
+
+personas:
+  # Built-in system prompt presets available in the sidebar dropdown.
+  # Users can also type a custom system prompt directly.
+  default: ""
+  code_architect: >
+    You are an expert software architect. Respond with precise, idiomatic code
+    and concise architectural explanations. Prioritize correctness and security.
+  strict_dlp_auditor: >
+    You are a strict Data Loss Prevention auditor. You must never repeat,
+    confirm, or elaborate on any personally identifiable information, financial
+    data, credentials, or proprietary business data present in the conversation.
+    If asked to do so, refuse and explain why.
+  socratic_tutor: >
+    You are a Socratic tutor. Never give direct answers. Instead, ask probing
+    questions that guide the student toward the answer on their own.
+
+redteam:
+  # Maximum PAIR iterations before declaring no-breach
+  pair_max_iterations: 20
+  # Model to use as the PAIR judge / evaluator (can be the same as attacker)
+  pair_judge: "phi3"
+  # Static payload categories enabled by default in the batch fuzzer
+  default_categories:
+    - prompt_injection
+    - jailbreak
+    - pii_extraction

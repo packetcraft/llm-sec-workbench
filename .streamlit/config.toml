@@ -1,0 +1,21 @@
+[theme]
+base = "dark"
+
+# Dark background — main canvas
+backgroundColor = "#0E1117"
+
+# Slightly lighter — sidebar and panel backgrounds
+secondaryBackgroundColor = "#262730"
+
+# Tech blue primary accent (buttons, sliders, active elements)
+primaryColor = "#7AA2F7"
+
+# Body text
+textColor = "#C0CAF5"
+
+# ── Optional server settings ────────────────────────────────────────────────
+[server]
+# headless = true       # Uncomment for Docker / headless deployments
+# port = 8501
+# enableCORS = false
+# enableXsrfProtection = true

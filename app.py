@@ -1,0 +1,188 @@
+"""
+app.py
+──────
+Streamlit entry point for LLM Security Workbench.
+
+Responsibilities
+----------------
+1. Set page config (must be the first Streamlit call).
+2. Load config.yaml and environment variables.
+3. Initialise session state defaults.
+4. Instantiate the OllamaClient (cached for the app lifetime).
+5. Route to the correct view:
+     - Ollama unreachable   → connection error screen
+     - Required models absent → First Run download screen
+     - Everything ready     → main chat view
+
+Phase integration notes
+-----------------------
+Phase 2 will add:
+  - Pipeline initialisation (PipelineManager, gate configs in session_state)
+  - Routing the chat view through the pipeline instead of the raw client
+Phase 5+ will add:
+  - Additional top-level tabs (Red Team, Metrics)
+"""
+
+from __future__ import annotations
+
+import os
+
+import streamlit as st
+import yaml
+from dotenv import load_dotenv
+
+# ── MUST be the very first Streamlit call ─────────────────────────────────────
+st.set_page_config(
+    page_title="LLM Security Workbench",
+    page_icon="🔐",
+    layout="wide",
+    initial_sidebar_state="expanded",
+    menu_items={
+        "Get Help": "https://github.com/your-org/llm-sec-workbench/issues",
+        "Report a bug": "https://github.com/your-org/llm-sec-workbench/issues",
+        "About": "LLM Security Workbench — local AI red-teaming and defence testing.",
+    },
+)
+
+load_dotenv()
+
+
+# ── Cached resource loaders ───────────────────────────────────────────────────
+
+@st.cache_resource
+def _load_config() -> dict:
+    """Load config.yaml once and cache for the app lifetime.
+
+    If config.yaml is missing, returns a minimal default dict so the app
+    still starts (Ollama connection check will fail gracefully if needed).
+    """
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
+    try:
+        with open(config_path) as fh:
+            return yaml.safe_load(fh) or {}
+    except FileNotFoundError:
+        st.warning("`config.yaml` not found — using built-in defaults.")
+        return {
+            "models": {"target": "llama3", "safety": "llama-guard3", "attacker": "phi3"},
+            "generation": {
+                "temperature": 0.7,
+                "top_p": 0.9,
+                "top_k": 40,
+                "repeat_penalty": 1.1,
+                "max_tokens": 2048,
+            },
+        }
+
+
+@st.cache_resource
+def _build_client(host: str, model: str):
+    """Instantiate and cache the OllamaClient.
+
+    The client holds a connection pool; caching it means one pool is shared
+    across all Streamlit re-runs for the lifetime of the server process.
+    This also ensures we never race-connect from multiple threads.
+    """
+    from core.llm_client import OllamaClient
+    return OllamaClient(model=model, host=host)
+
+
+# ── Session state initialisation ──────────────────────────────────────────────
+
+def _init_session_state(config: dict) -> None:
+    """Set default session_state values on first page load.
+
+    Keys defined here span all phases so that Phase 2+ code can read them
+    without needing to add initialisation elsewhere.
+    """
+    gen = config.get("generation", {})
+
+    defaults: dict = {
+        # Chat history
+        "messages": [],
+
+        # UI toggles
+        "demo_mode": False,
+
+        # Persona / system prompt
+        "persona": "Default",
+        "system_prompt": "",
+
+        # RAG simulation (Section 9.5)
+        "rag_context": "",
+
+        # Hot-Patching (Section 9.5) — wired to RegexGate in Phase 2
+        "custom_block_phrases": "",
+
+        # Generation parameters (Section 9.1)
+        "temperature": float(gen.get("temperature", 0.7)),
+        "top_p": float(gen.get("top_p", 0.9)),
+        "top_k": int(gen.get("top_k", 40)),
+        "repeat_penalty": float(gen.get("repeat_penalty", 1.1)),
+
+        # Selected target model — defaults to config.yaml, overridden by the sidebar dropdown
+        "target_model": config.get("models", {}).get("target", "llama3"),
+
+        # Phase 2+ — gate modes (pre-initialised to avoid KeyErrors)
+        # Format: {"fast_scan": "AUDIT", "classify": "AUDIT", ...}
+        "gate_modes": {},
+    }
+
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+
+
+# ── Model availability helper ─────────────────────────────────────────────────
+
+def _model_present(name: str, available: list[str]) -> bool:
+    """Return True if the base model name (without :tag) is in the available list.
+
+    Handles the common case where the config says ``"llama3"`` but Ollama
+    returns ``"llama3:latest"``.
+    """
+    base = name.split(":")[0].lower().strip()
+    return any(base == a.split(":")[0].lower().strip() for a in available)
+
+
+# ── Entry point ───────────────────────────────────────────────────────────────
+
+def main() -> None:
+    config = _load_config()
+    _init_session_state(config)
+
+    ollama_host: str = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+    # Use the sidebar-selected model if set; otherwise fall back to config.yaml default.
+    # _build_client is cached per (host, model) so switching models reuses existing pools.
+    target_model: str = st.session_state.get(
+        "target_model",
+        config.get("models", {}).get("target", "llama3"),
+    )
+    client = _build_client(host=ollama_host, model=target_model)
+
+    from ui.chat_view import render, render_connection_error, render_first_run
+
+    # ── Route: Ollama unreachable ─────────────────────────────────────────────
+    if not client.is_available():
+        render_connection_error(ollama_host)
+        return
+
+    # ── Route: First Run — required models not yet pulled ─────────────────────
+    available_models = client.list_models()
+    required_models: list[str] = [
+        config.get("models", {}).get("target", "llama3"),
+        config.get("models", {}).get("safety", "llama-guard3"),
+        config.get("models", {}).get("attacker", "phi3"),
+    ]
+    missing = [m for m in required_models if not _model_present(m, available_models)]
+
+    if missing:
+        render_first_run(client, missing)
+        return
+
+    # ── Route: Main chat view ─────────────────────────────────────────────────
+    # Phase 2: pipeline = PipelineManager(config, gate_modes=st.session_state.gate_modes)
+    # Phase 2: render(client, config, pipeline=pipeline)
+    render(client, config)
+
+
+main()
