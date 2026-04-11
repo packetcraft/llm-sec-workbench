@@ -795,7 +795,7 @@ def _render_chat_content(pipeline: "PipelineManager", config: dict, prompt: str 
             )
 
     # ── Chat history ───────────────────────────────────────────────────────────
-    for msg in st.session_state.messages:
+    for _msg_idx, msg in enumerate(st.session_state.messages):
         with st.chat_message(msg["role"]):
             # Blocked assistant turns rendered as errors
             if msg.get("blocked"):
@@ -827,7 +827,11 @@ def _render_chat_content(pipeline: "PipelineManager", config: dict, prompt: str 
                     )
                 # API Inspector
                 if msg.get("raw_traces"):
-                    render_api_inspector(msg["raw_traces"], msg.get("gate_metrics") or [])
+                    render_api_inspector(
+                        msg["raw_traces"],
+                        msg.get("gate_metrics") or [],
+                        idx=_msg_idx,
+                    )
 
     # ── Chat input ─────────────────────────────────────────────────────────────
     # prompt is captured by _render_chat_area() at the outer scope so that

@@ -707,6 +707,8 @@ def _build_inspector_md(raw_traces: dict, metrics: list[dict]) -> str:
 def render_api_inspector(
     raw_traces: dict,
     metrics: list[dict],
+    *,
+    idx: int | None = None,
 ) -> None:
     """Collapsible expander with one tab per gate — request/response JSON side by side.
 
@@ -738,7 +740,14 @@ def render_api_inspector(
 
         # ── Export row ────────────────────────────────────────────────────────
         import datetime
-        ts         = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Key must be stable and unique across all inspector instances on the page.
+        # Use the message index when provided; fall back to a hash of the trace keys.
+        key_id = (
+            str(idx)
+            if idx is not None
+            else str(abs(hash(tuple(sorted(raw_traces.keys())))))
+        )
         json_bytes = _build_inspector_json(raw_traces, metrics).encode()
         md_bytes   = _build_inspector_md(raw_traces, metrics).encode()
 
@@ -750,7 +759,7 @@ def render_api_inspector(
                 file_name=f"workbench_trace_{ts}.json",
                 mime="application/json",
                 use_container_width=True,
-                key=f"dl_json_{ts}",
+                key=f"dl_json_{key_id}",
             )
         with exp_right:
             st.download_button(
@@ -759,7 +768,7 @@ def render_api_inspector(
                 file_name=f"workbench_trace_{ts}.md",
                 mime="text/markdown",
                 use_container_width=True,
-                key=f"dl_md_{ts}",
+                key=f"dl_md_{key_id}",
             )
 
         st.markdown(
