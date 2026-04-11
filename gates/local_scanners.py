@@ -8,6 +8,9 @@ Gate 2  PromptGuardGate  — Injection/jailbreak classification via
          protectai/deberta-v3-base-prompt-injection-v2 (CPU).
 Gate 1d ToxicityInputGate — Detects hostile/abusive/toxic input tone (Toxicity +
          Sentiment sub-scanners). Quality gate — defaults to AUDIT.
+Gate 1e BanTopicsGate    — Blocks prompts that fall into operator-defined forbidden
+         subject areas using zero-shot classification (roberta-base-c-v2 via
+         llm-guard BanTopics). No-op when no topics are configured.
 Gate A  DeanonymizeGate  — Restores PII placeholders in LLM responses via Vault.
 Gate B  SensitiveGate    — Output-side PII scanner; catches PII the LLM generates
          on its own that the input-side Anonymize can never see.
@@ -541,6 +544,117 @@ class ToxicityInputGate(SecurityGate):
         return payload
 
 
+# ── Gate 1e: BanTopicsGate ───────────────────────────────────────────────────
+
+class BanTopicsGate(SecurityGate):
+    """Blocks prompts that fall into operator-defined forbidden subject areas.
+
+    Uses llm-guard's ``BanTopics`` input scanner, which applies a zero-shot
+    text classification model (``MoritzLaurer/deberta-v3-base-zeroshot-v1.1-all-33``)
+    to score the input against each configured topic.  If any topic exceeds the
+    configured threshold the prompt is blocked.
+
+    This gate is a **no-op** (verdict: SKIP) when no topics are configured, so
+    enabling it without configuring topics has no effect on the pipeline.
+
+    Use cases
+    ---------
+    - Restrict a customer-service bot to only discuss the company's products.
+    - Prevent a coding assistant from discussing politics or religion.
+    - Enforce subject-matter constraints in regulated environments (e.g. legal,
+      medical) without writing exhaustive keyword lists.
+
+    Compared to ``CustomRegexGate``
+    --------------------------------
+    CustomRegexGate matches exact phrases — fast but brittle (easily paraphrased).
+    BanTopicsGate understands semantic meaning — "how do I make a bomb" and
+    "explain explosive synthesis" both hit a "weapons" topic even though they
+    share no keywords.  The tradeoff is latency (500 ms–2 s on CPU vs < 1 ms).
+
+    Gate ordering note
+    ------------------
+    Runs last in the input chain because it is the most expensive CPU-bound
+    scanner (zero-shot model inference).  Cheaper gates (regex, token limit,
+    invisible text, fast scan, classify, toxicity) run first and may short-circuit
+    before this gate is reached.
+
+    Config keys
+    -----------
+    topics    : list[str]  (required) — forbidden subject areas, e.g.
+                ["weapons", "self-harm", "politics"].  Empty list → SKIP.
+    threshold : float      (default 0.5) — zero-shot classification confidence
+                cutoff above which a topic match is treated as a violation.
+    """
+
+    @property
+    def name(self) -> str:
+        return "ban_topics"
+
+    def _scan(self, payload: PipelinePayload) -> PipelinePayload:
+        t_start = time.perf_counter()
+
+        topics    = self.config.get("topics", [])
+        threshold = float(self.config.get("threshold", 0.5))
+
+        # No-op path — no topics configured
+        if not topics:
+            payload.metrics.append({
+                "gate_name":  self.name,
+                "latency_ms": round((time.perf_counter() - t_start) * 1000, 2),
+                "score":      0.0,
+                "verdict":    "SKIP",
+                "detail":     "No banned topics configured.",
+            })
+            return payload
+
+        from llm_guard.input_scanners import BanTopics
+
+        scanner = BanTopics(topics=topics, threshold=threshold)
+        _, is_valid, risk_score = scanner.scan(payload.original_input)
+
+        latency_ms = round((time.perf_counter() - t_start) * 1000, 2)
+
+        payload.raw_traces[self.name] = {
+            "request": {
+                "text_checked": payload.original_input,
+                "topics":       topics,
+                "threshold":    threshold,
+            },
+            "response": {
+                "is_valid":   is_valid,
+                "risk_score": round(float(risk_score), 4),
+            },
+        }
+
+        if not is_valid:
+            payload.is_blocked   = True
+            payload.block_reason = (
+                f"Prompt covers a restricted topic "
+                f"(score={float(risk_score):.2f} \u2265 threshold={threshold:.2f}). "
+                f"Configured topics: {', '.join(topics)}."
+            )
+            payload.metrics.append({
+                "gate_name":  self.name,
+                "latency_ms": latency_ms,
+                "score":      round(float(risk_score), 4),
+                "verdict":    "BLOCK",
+                "detail":     payload.block_reason,
+            })
+        else:
+            payload.metrics.append({
+                "gate_name":  self.name,
+                "latency_ms": latency_ms,
+                "score":      round(float(risk_score), 4),
+                "verdict":    "PASS",
+                "detail":     (
+                    f"No restricted topics detected (score={float(risk_score):.2f}). "
+                    f"Topics checked: {', '.join(topics)}."
+                ),
+            })
+
+        return payload
+
+
 # ── Gate B: SensitiveGate ────────────────────────────────────────────────────
 
 class SensitiveGate(SecurityGate):
@@ -762,7 +876,12 @@ class RelevanceGate(SecurityGate):
 
     Config keys
     -----------
-    threshold : float (default 0.5) — minimum cosine similarity to PASS.
+    threshold  : float (default 0.5)   — minimum cosine similarity to PASS.
+    head_chars : int   (default 300)   — number of leading characters of the
+                 response to embed.  Using the full response inflates similarity
+                 when the model appends meta-comments that reference the original
+                 topic (e.g. "Note: your query was about X…"), producing false
+                 PASSes even when the actual content is off-topic.
     """
 
     @property
@@ -784,14 +903,23 @@ class RelevanceGate(SecurityGate):
             })
             return payload
 
-        threshold = float(self.config.get("threshold", 0.5))
+        threshold    = float(self.config.get("threshold", 0.5))
+        head_chars   = int(self.config.get("head_chars", 300))
+
+        # Truncate to the first `head_chars` characters of the response before
+        # embedding.  Whole-document similarity is easily inflated by meta-
+        # comments the model appends (e.g. "Note: your query was about X…"),
+        # which pull the embedding back toward the prompt even when the actual
+        # response content is completely off-topic.  Checking only the leading
+        # content captures what the model *led with* — the true answer signal.
+        response_head = payload.output_text[:head_chars]
 
         scanner = Relevance(threshold=threshold)
         # Use original_input as the reference prompt — most semantically
         # complete representation of the user's intent.
         _, is_valid, risk_score = scanner.scan(
             payload.original_input,
-            payload.output_text,
+            response_head,
         )
 
         latency_ms = round((time.perf_counter() - t_start) * 1000, 2)
@@ -801,9 +929,10 @@ class RelevanceGate(SecurityGate):
 
         payload.raw_traces[self.name] = {
             "request": {
-                "prompt":      payload.original_input,
-                "output_text": payload.output_text,
-                "threshold":   threshold,
+                "prompt":        payload.original_input,
+                "response_head": response_head,
+                "head_chars":    head_chars,
+                "threshold":     threshold,
             },
             "response": {
                 "is_valid":   is_valid,
@@ -958,7 +1087,12 @@ def _check_url_heuristics(url: str) -> tuple[bool, str]:
     domain_label  = labels[-2] if len(labels) >= 2 else labels[0]
     normalised    = domain_label.translate(_DIGIT_SUB).replace("-", "")
     for brand in _KNOWN_BRANDS:
-        if brand in normalised and normalised != brand:
+        # Flag when: the normalised form contains the brand name AND the
+        # original label was actually modified by the translation (i.e. a
+        # substitution was made).  Checking `domain_label != normalised`
+        # rather than `normalised != brand` correctly handles cases like
+        # "g00gle" → "google" where normalised equals the brand exactly.
+        if brand in normalised and domain_label != normalised:
             return True, f"Possible brand impersonation of '{brand}' in: {host}"
 
     # 5. Excessive subdomains (> 3 dots in host → likely abuse of free subdomain)

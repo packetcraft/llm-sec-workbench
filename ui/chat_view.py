@@ -357,12 +357,13 @@ def _render_sidebar(pipeline: "PipelineManager", config: dict) -> None:
             unsafe_allow_html=True,
         )
 
-        st.session_state.custom_block_phrases = st.text_input(
-            "Block Phrases",
-            value=st.session_state.custom_block_phrases,
-            placeholder="e.g. ignore all previous, jailbreak, DAN",
-            help="Comma-separated, case-insensitive. Checked against the raw user input.",
-        )
+        if new_regex_mode != "OFF":
+            st.session_state.custom_block_phrases = st.text_input(
+                "Block Phrases",
+                value=st.session_state.custom_block_phrases,
+                placeholder="e.g. ignore all previous, jailbreak, DAN",
+                help="Comma-separated, case-insensitive. Checked against the raw user input.",
+            )
 
         st.markdown("---")
 
@@ -467,6 +468,7 @@ def _render_sidebar(pipeline: "PipelineManager", config: dict) -> None:
             ),
         ]
 
+        # Render classifier gates
         for gate_key, gate_label, gate_help in _CLASSIFIER_GATES:
             current_clf_mode = st.session_state.gate_modes.get(gate_key, "AUDIT")
             new_clf_mode = st.radio(
@@ -501,6 +503,75 @@ def _render_sidebar(pipeline: "PipelineManager", config: dict) -> None:
                         "0.7 is recommended for general use."
                     ),
                 )
+
+        # ── Ban Topics (Gate 1e) ───────────────────────────────────────────────
+        ban_topics_mode = st.session_state.gate_modes.get("ban_topics", "AUDIT")
+        new_ban_mode = st.radio(
+            "Ban Topics (Subject Filter)",
+            options=["OFF", "AUDIT", "ENFORCE"],
+            index=["OFF", "AUDIT", "ENFORCE"].index(ban_topics_mode),
+            horizontal=True,
+            help=(
+                "Zero-shot topic classifier — blocks prompts covering forbidden subjects.\n"
+                "Uses semantic understanding, not keyword matching.\n"
+                "AUDIT: flags matching topics in telemetry, pipeline continues.\n"
+                "ENFORCE: blocks the prompt if any configured topic is detected.\n"
+                "OFF: gate is skipped entirely (no-op if Topics list is empty)."
+            ),
+        )
+        if new_ban_mode != ban_topics_mode:
+            st.session_state.gate_modes["ban_topics"] = new_ban_mode
+            st.rerun()
+        badge_color = mode_colors[new_ban_mode]
+        st.markdown(
+            f"<span style='color:{badge_color};font-size:0.78rem'>"
+            f"● ban_topics — {new_ban_mode}</span>",
+            unsafe_allow_html=True,
+        )
+
+        if new_ban_mode != "OFF":
+            st.session_state.ban_topics_list = st.text_input(
+                "Banned Topics",
+                value=st.session_state.get("ban_topics_list", ""),
+                placeholder="e.g. weapons, self-harm, politics",
+                help=(
+                    "Comma-separated subject areas the model must not discuss.\n"
+                    "Uses zero-shot classification — paraphrases are caught too.\n"
+                    "Gate is a no-op when this list is empty.\n"
+                    "Examples: weapons, gambling, competitor products, adult content."
+                ),
+            )
+
+        st.markdown("---")
+
+        # ── LLM Judges ────────────────────────────────────────────────────────
+        st.markdown("#### LLM Judges")
+
+        current_mod_mode = st.session_state.gate_modes.get("mod_llm", "AUDIT")
+        new_mod_mode = st.radio(
+            "Llama Guard 3",
+            options=["OFF", "AUDIT", "ENFORCE"],
+            index=["OFF", "AUDIT", "ENFORCE"].index(current_mod_mode),
+            horizontal=True,
+            help=(
+                "Meta Llama Guard 3 — LLM-as-judge safety classifier (Ollama).\n"
+                "Classifies the raw user prompt against 14 harm categories "
+                "(S1–S14: violent crimes, CBRN weapons, CSAM, hate, self-harm, etc.).\n"
+                "Requires llama-guard3 to be pulled in Ollama.\n"
+                "AUDIT: logs verdict and categories, pipeline continues.\n"
+                "ENFORCE: blocks the prompt if any safety category is violated.\n"
+                "OFF: gate skipped entirely (no Ollama call)."
+            ),
+        )
+        if new_mod_mode != current_mod_mode:
+            st.session_state.gate_modes["mod_llm"] = new_mod_mode
+            st.rerun()
+        badge_color = mode_colors[new_mod_mode]
+        st.markdown(
+            f"<span style='color:{badge_color};font-size:0.78rem'>"
+            f"● mod_llm — {new_mod_mode}</span>",
+            unsafe_allow_html=True,
+        )
 
         st.markdown("---")
 
@@ -880,6 +951,37 @@ def _render_chat_area(pipeline: "PipelineManager", config: dict) -> None:
                             "The input tone was flagged by the Toxicity / Sentiment scanner. "
                             "Switch the gate to ENFORCE to block such inputs.",
                             icon="⚠️",
+                        )
+
+                    ban_topics_block = next(
+                        (m for m in payload.metrics
+                         if m.get("gate_name") == "ban_topics"
+                         and m.get("verdict") == "BLOCK"),
+                        None,
+                    )
+                    if ban_topics_block:
+                        st.warning(
+                            f"**Restricted topic detected** — "
+                            f"{ban_topics_block['detail']}  \n"
+                            "This prompt covers a subject area that has been restricted by the operator. "
+                            "Switch the gate to ENFORCE to block such prompts before they reach the model.",
+                            icon="🚫",
+                        )
+
+                    mod_llm_block = next(
+                        (m for m in payload.metrics
+                         if m.get("gate_name") == "mod_llm"
+                         and m.get("verdict") == "BLOCK"),
+                        None,
+                    )
+                    if mod_llm_block:
+                        st.warning(
+                            f"**Llama Guard 3 safety violation** *(LLM-as-a-judge)* — "
+                            f"{mod_llm_block['detail']}  \n"
+                            "The Llama Guard 3 model identified a policy violation in this prompt. "
+                            "As an LLM judge, verdicts may occasionally produce false positives — "
+                            "review the violated categories before switching the gate to ENFORCE.",
+                            icon="🤖",
                         )
 
                     bias_out_block = next(

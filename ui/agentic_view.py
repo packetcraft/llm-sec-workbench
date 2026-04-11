@@ -89,7 +89,9 @@ def _load_audit(audit_path: str) -> tuple[pd.DataFrame, dict]:
         return pd.DataFrame(), sessions
 
     df = pd.DataFrame(all_records)
-    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
+    import datetime as _dt
+    _local_tz = _dt.datetime.now().astimezone().tzinfo
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce").dt.tz_convert(_local_tz)
     df = df.sort_values("timestamp").reset_index(drop=True)
     return df, sessions
 
@@ -264,11 +266,12 @@ def _render_audit_explorer(audit_path: str) -> None:
         st.warning("No events match the current filters.")
         return
 
-    # ── Paginated event table ─────────────────────────────────────────────────
+    # ── Paginated event table (newest first) ──────────────────────────────────
     PAGE_SIZE = 25
-    total_pages = max(1, (len(filtered) - 1) // PAGE_SIZE + 1)
+    filtered_desc = filtered.iloc[::-1].reset_index(drop=True)
+    total_pages = max(1, (len(filtered_desc) - 1) // PAGE_SIZE + 1)
     page = st.number_input("Page", min_value=1, max_value=total_pages, value=1, step=1, key="ae_page")
-    page_df = filtered.iloc[(page - 1) * PAGE_SIZE : page * PAGE_SIZE].reset_index(drop=True)
+    page_df = filtered_desc.iloc[(page - 1) * PAGE_SIZE : page * PAGE_SIZE].reset_index(drop=True)
 
     # Header row
     h1, h2, h3, h4, h5, h6 = st.columns([2, 1, 1, 1, 1, 4])

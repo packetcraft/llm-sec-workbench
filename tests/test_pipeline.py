@@ -248,3 +248,136 @@ def test_build_messages_uses_current_text_not_original(empty_pipeline):
     )
     # Last user message should use the masked current_text
     assert messages[-1]["content"] == "[CREDIT_CARD] gave it to me"
+
+
+# ── Fail-open guarantee ───────────────────────────────────────────────────────
+
+
+@pytest.mark.unit
+def test_broken_input_gate_does_not_block_pipeline(mock_client):
+    """If a gate's _scan() raises, the pipeline must continue as if it passed."""
+    from gates.base_gate import SecurityGate
+
+    class _Exploding(SecurityGate):
+        @property
+        def name(self) -> str:
+            return "exploding"
+
+        def _scan(self, payload: PipelinePayload) -> PipelinePayload:
+            raise RuntimeError("model load failed")
+
+    pipeline = PipelineManager(
+        client=mock_client,
+        input_gates=[("exploding", _Exploding(config={}))],
+        output_gates=[],
+    )
+    payload = pipeline.run_input_gates("hello", gate_modes={"exploding": "ENFORCE"})
+    assert payload.is_blocked is False  # fail-open
+    assert payload.metrics[0]["verdict"] == "ERROR"
+
+
+@pytest.mark.unit
+def test_broken_output_gate_does_not_block_pipeline(mock_client):
+    from gates.base_gate import SecurityGate
+
+    class _Exploding(SecurityGate):
+        @property
+        def name(self) -> str:
+            return "exploding_out"
+
+        def _scan(self, payload: PipelinePayload) -> PipelinePayload:
+            raise RuntimeError("scanner crashed")
+
+    pipeline = PipelineManager(
+        client=mock_client,
+        input_gates=[],
+        output_gates=[("exploding_out", _Exploding(config={}))],
+    )
+    payload = PipelinePayload(
+        original_input="hello",
+        current_text="hello",
+        output_text="The answer is 42.",
+    )
+    result = pipeline.run_output_gates(payload, gate_modes={"exploding_out": "ENFORCE"})
+    assert result.is_blocked is False
+    assert result.metrics[0]["verdict"] == "ERROR"
+
+
+# ── Vault threading (FastScanGate → DeanonymizeGate) ─────────────────────────
+
+
+@pytest.mark.unit
+def test_vault_threads_from_fast_scan_to_deanonymize(mock_client):
+    """payload.vault set by FastScanGate must be readable by DeanonymizeGate."""
+    from unittest.mock import patch, MagicMock
+    from gates.local_scanners import FastScanGate, DeanonymizeGate
+
+    original_text = "My name is Alice"
+    masked_text = "My name is [PERSON_1]"
+    restored_text = "My name is Alice"
+
+    mock_vault = MagicMock()
+    mock_anon = MagicMock()
+    mock_anon.scan.return_value = (masked_text, False, 0.9)
+    mock_sec = MagicMock()
+    mock_sec.scan.return_value = (original_text, True, 0.0)
+
+    mock_deano_scanner = MagicMock()
+    mock_deano_scanner.scan.return_value = (restored_text, True, 0.0)
+
+    fast_scan = FastScanGate(config={"scan_pii": True, "scan_secrets": False, "pii_threshold": 0.5})
+    deanon = DeanonymizeGate(config={})
+
+    mock_client.generate.return_value.output_text = "Hello [PERSON_1], how are you?"
+
+    pipeline = PipelineManager(
+        client=mock_client,
+        input_gates=[("fast_scan", fast_scan)],
+        output_gates=[("deanonymize", deanon)],
+    )
+
+    with patch("llm_guard.input_scanners.Anonymize", return_value=mock_anon), \
+         patch("llm_guard.input_scanners.Secrets", return_value=mock_sec), \
+         patch("llm_guard.vault.Vault", return_value=mock_vault), \
+         patch("llm_guard.output_scanners.Deanonymize", return_value=mock_deano_scanner):
+
+        payload = pipeline.run_input_gates(original_text, {"fast_scan": "AUDIT"})
+        # Simulate LLM inference populating output_text
+        payload.output_text = "Hello [PERSON_1], how are you?"
+        result = pipeline.run_output_gates(payload, {"deanonymize": "ENFORCE"})
+
+    # Vault set by FastScanGate must have been consumed by DeanonymizeGate
+    assert result.vault is mock_vault
+    assert result.output_text == restored_text
+
+
+# ── original_input immutability across the full pipeline ─────────────────────
+
+
+@pytest.mark.unit
+def test_original_input_immutable_through_full_pipeline(mock_client):
+    """No gate, no inference step, no pipeline method may modify original_input."""
+    from unittest.mock import patch, MagicMock
+    from gates.local_scanners import FastScanGate
+
+    raw = "My SSN is 123-45-6789"
+    mock_vault = MagicMock()
+    mock_anon = MagicMock()
+    mock_anon.scan.return_value = ("My SSN is [SSN]", False, 0.95)
+    mock_sec = MagicMock()
+    mock_sec.scan.return_value = (raw, True, 0.0)
+
+    fast_scan = FastScanGate(config={"scan_pii": True, "scan_secrets": False, "pii_threshold": 0.5})
+    pipeline = PipelineManager(
+        client=mock_client,
+        input_gates=[("fast_scan", fast_scan)],
+        output_gates=[],
+    )
+
+    with patch("llm_guard.input_scanners.Anonymize", return_value=mock_anon), \
+         patch("llm_guard.input_scanners.Secrets", return_value=mock_sec), \
+         patch("llm_guard.vault.Vault", return_value=mock_vault):
+        payload = pipeline.execute(raw, gate_modes={"fast_scan": "AUDIT"})
+
+    assert payload.original_input == raw            # never modified
+    assert payload.current_text == "My SSN is [SSN]"  # correctly masked

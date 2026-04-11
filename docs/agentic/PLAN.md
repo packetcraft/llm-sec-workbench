@@ -284,7 +284,13 @@ agentic:
   guard_model: "qwen2.5:1.5b"    # Ollama model for hook inspection
   guard_timeout_ms: 5000          # Hard timeout before fail-open (documented: do not change silently)
   allowlist_enabled: true         # Toggle allowlist bypass for read-only ops
+  allowlist_patterns: []          # Additional regex patterns appended to built-in list
+  audit_only: true                # When true, log BLOCK verdicts but never exit 2 (never block)
 ```
+
+**`audit_only` mode:** When `true`, the hook classifies and logs every tool call — including BLOCK verdicts — but always exits 0. Stderr shows `[agentic-guard] AUDIT: would have blocked — <reason>` instead of blocking. Set to `false` to enable enforcement mode.
+
+**Recommended practice:** Keep `audit_only: true` during active development to avoid blocking legitimate agent actions. Switch to `false` during security review sessions or in production-like environments.
 
 ---
 
@@ -297,11 +303,14 @@ Standalone Python script. No dependency on the Streamlit app — must run in any
 Deliverables:
 - Reads tool call JSON from stdin
 - Allowlist check (configurable via `config.yaml`)
-- Secret redaction pass
+- Secret redaction pass (before Ollama call and before JSONL write)
 - Ollama structured classification call with 5s timeout
+- PostToolUse support: scans command output for exfiltration signals (audit-only, always exits 0)
 - JSONL append (session file in `audit/`)
 - `SESSION_START` record on first write to a new session file
-- Exit code logic: 0 (allow), 2 (block)
+- `audit_only` mode: logs BLOCK verdicts without exiting 2
+- Exit code logic: 0 (allow / audit-only / fail-open), 2 (block, enforcement mode only)
+- Git Bash / Windows path fallback: resolves `cwd` via `Path.cwd()` when JSON cwd is a Unix-style path
 
 ### Phase B — Claude Code Hook Registration
 
@@ -327,7 +336,11 @@ Deliverables:
 - `docs/agentic/ADVERSARIAL.md` — bypass techniques, MITRE ATLAS mapping, hardening playbook
 - `docs/QUICKSTART.md` — new "Agentic Security Setup" section
 
-> **Current status:** Phase D (this document) is in progress. Phases A–C not yet started.
+> **Current status:** Phases A–D complete. All deliverables implemented and committed (`b2818c3`).
+> - Phase A: `hooks/agentic_guard.py` — hook script with allowlist, redaction, Ollama classify, audit_only mode
+> - Phase B: `.claude/settings.json` + `hooks/settings.template.json` — hook registration
+> - Phase C: `ui/agentic_view.py` + `app.py` nav — Live Feed, Audit Explorer, Dashboard tabs
+> - Phase D: `docs/agentic/` — PLAN, ARCHITECTURE, PLAYGROUND (exercises 1–19), ADVERSARIAL (placeholder)
 
 ---
 
