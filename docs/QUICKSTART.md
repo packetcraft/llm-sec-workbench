@@ -80,13 +80,45 @@ OLLAMA_HOST="http://localhost:11434"
 
 ---
 
-## Step 5 — Install Python Dependencies
+## Step 5 — Create a Virtual Environment and Install Dependencies
+
+Always install into a virtual environment — never into the global Python installation.
+**Python 3.11 is strongly recommended** (pre-built wheels for all dependencies are available).
+Python 3.12+ may require compilation of some packages (`sentencepiece`, `thinc`, `llm-guard`).
+
+### Create and activate the venv
+
+**Windows (Git Bash / MINGW):**
+```bash
+py -3.11 -m venv venv
+source venv/Scripts/activate
+```
+
+**Windows (PowerShell):**
+```powershell
+py -3.11 -m venv venv
+venv\Scripts\activate
+```
+
+**Mac / Linux:**
+```bash
+python3.11 -m venv venv
+source venv/bin/activate
+```
+
+Your prompt will show `(venv)` when the environment is active.
+
+> If `py -3.11` is not found, see [Installing Python 3.11](#installing-python-311) below.
+
+### Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
 > PyTorch is installed in **CPU-only** mode to prevent CUDA/ONNX conflicts and preserve GPU VRAM for Ollama.
+
+> **Always activate the venv before working on this project.** Run `deactivate` to exit it.
 
 ---
 
@@ -307,15 +339,11 @@ Navigate to **Agentic Security** in the sidebar. Three tabs:
 **`llm-guard` or `transformers` install errors**
 - Ensure you are using Python 3.10+.
 - Run `pip install --upgrade pip setuptools wheel` before re-running `pip install -r requirements.txt`.
-- If you are on Python 3.13+ and packages fail to build (e.g. `sentencepiece`, `llm-guard`), use a Python 3.11 or 3.12 virtual environment — pre-built wheels are available for those versions. See [Using Python 3.11/3.12 via a virtual environment](#using-python-3113-12-via-a-virtual-environment) below.
+- If you are on Python 3.12+ and packages fail to build (e.g. `sentencepiece`, `llm-guard`), use Python 3.11 — pre-built wheels are available for that version. See [Installing Python 3.11](#installing-python-311) below.
 
 ---
 
-## Using Python 3.11 via a virtual environment
-
-Python 3.12+ may fail to build some packages (e.g. `thinc`, `sentencepiece`, `llm-guard`) because pre-built wheels are not yet available for those versions on Windows. **Python 3.11 is the recommended version** — all wheels are available and no compilation is required.
-
-### 1. Install Python 3.11
+## Installing Python 3.11
 
 Check if it is already available:
 
@@ -323,59 +351,19 @@ Check if it is already available:
 py --list
 ```
 
-If `-V:3.11` appears, skip to step 2. If not, download the **Windows installer (64-bit)** from:
+If `-V:3.11` appears, you are ready — go back to [Step 5](#step-5--create-a-virtual-environment-and-install-dependencies).
+
+If not, download the **Windows installer (64-bit)** from:
 
 ```
 https://www.python.org/downloads/release/python-3119/
 ```
 
-Run the installer and check **"Add python.exe to PATH"** on the first screen.
-
-### 2. Verify the version is available
+Run the installer and check **"Add python.exe to PATH"** on the first screen. Then verify:
 
 ```bash
 py -3.11 --version
 ```
-
-### 3. Delete any existing venv and recreate with 3.11
-
-```bash
-rm -rf venv
-py -3.11 -m venv venv
-```
-
-### 4. Activate the virtual environment
-
-**Windows (Git Bash / MINGW):**
-```bash
-source venv/Scripts/activate
-```
-
-**Windows (PowerShell):**
-```powershell
-venv\Scripts\activate
-```
-
-**Mac / Linux:**
-```bash
-source venv/bin/activate
-```
-
-Your prompt will change to show `(venv)` when the environment is active.
-
-### 5. Install dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-### 6. Run the app
-
-```bash
-python -m streamlit run app.py
-```
-
-> Always activate the virtual environment before working on this project. Run `deactivate` to exit it.
 
 **Prisma AIRS gates return errors**
 - Verify `PANW_API_KEY` is set correctly in `.env`.
