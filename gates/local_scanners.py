@@ -55,6 +55,32 @@ from core.payload import PipelinePayload
 from gates.base_gate import SecurityGate
 
 
+# ── Optional llm-guard dependency ────────────────────────────────────────────
+# llm_guard is a heavy ML dependency (Presidio, HuggingFace, etc.).  When it
+# is not installed every gate that depends on it degrades gracefully to SKIP
+# rather than raising ModuleNotFoundError (which the base class catches as an
+# ERROR verdict).  Gates that are pure-Python (TokenLimitGate, InvisibleText-
+# Gate, CustomRegexGate) are completely unaffected.
+
+try:
+    import llm_guard as _llm_guard_check  # noqa: F401
+    _LLM_GUARD_OK: bool = True
+except ImportError:
+    _LLM_GUARD_OK = False
+
+
+def _llm_guard_skip(gate_name: str, t_start: float, payload: PipelinePayload) -> PipelinePayload:
+    """Append a SKIP metric and return when llm-guard is not installed."""
+    payload.metrics.append({
+        "gate_name":  gate_name,
+        "latency_ms": round((time.perf_counter() - t_start) * 1000, 2),
+        "score":      0.0,
+        "verdict":    "SKIP",
+        "detail":     "llm-guard not installed — run: pip install llm-guard",
+    })
+    return payload
+
+
 # ── Module-level model cache ──────────────────────────────────────────────────
 
 @functools.lru_cache(maxsize=4)
@@ -265,6 +291,9 @@ class FastScanGate(SecurityGate):
 
     def _scan(self, payload: PipelinePayload) -> PipelinePayload:
         t_start = time.perf_counter()
+
+        if not _LLM_GUARD_OK:
+            return _llm_guard_skip(self.name, t_start, payload)
 
         from llm_guard.input_scanners import Anonymize, Secrets
         from llm_guard.vault import Vault
@@ -492,9 +521,12 @@ class ToxicityInputGate(SecurityGate):
         return "toxicity_in"
 
     def _scan(self, payload: PipelinePayload) -> PipelinePayload:
-        from llm_guard.input_scanners import Toxicity, Sentiment
-
         t_start = time.perf_counter()
+
+        if not _LLM_GUARD_OK:
+            return _llm_guard_skip(self.name, t_start, payload)
+
+        from llm_guard.input_scanners import Toxicity, Sentiment
 
         tox_threshold  = float(self.config.get("toxicity_threshold",  0.5))
         sent_threshold = float(self.config.get("sentiment_threshold", -0.5))
@@ -619,6 +651,9 @@ class BanTopicsGate(SecurityGate):
             })
             return payload
 
+        if not _LLM_GUARD_OK:
+            return _llm_guard_skip(self.name, t_start, payload)
+
         from llm_guard.input_scanners import BanTopics
 
         scanner = BanTopics(topics=topics, threshold=threshold)
@@ -703,9 +738,12 @@ class SensitiveGate(SecurityGate):
         return "sensitive_out"
 
     def _scan(self, payload: PipelinePayload) -> PipelinePayload:
-        from llm_guard.output_scanners import Sensitive
-
         t_start = time.perf_counter()
+
+        if not _LLM_GUARD_OK:
+            return _llm_guard_skip(self.name, t_start, payload)
+
+        from llm_guard.output_scanners import Sensitive
 
         if not payload.output_text:
             payload.metrics.append({
@@ -800,9 +838,12 @@ class BiasOutputGate(SecurityGate):
         return "bias_out"
 
     def _scan(self, payload: PipelinePayload) -> PipelinePayload:
-        from llm_guard.output_scanners import Bias, Toxicity as ToxicityOutput
-
         t_start = time.perf_counter()
+
+        if not _LLM_GUARD_OK:
+            return _llm_guard_skip(self.name, t_start, payload)
+
+        from llm_guard.output_scanners import Bias, Toxicity as ToxicityOutput
 
         if not payload.output_text:
             payload.metrics.append({
@@ -901,9 +942,12 @@ class RelevanceGate(SecurityGate):
         return "relevance"
 
     def _scan(self, payload: PipelinePayload) -> PipelinePayload:
-        from llm_guard.output_scanners import Relevance
-
         t_start = time.perf_counter()
+
+        if not _LLM_GUARD_OK:
+            return _llm_guard_skip(self.name, t_start, payload)
+
+        from llm_guard.output_scanners import Relevance
 
         if not payload.output_text:
             payload.metrics.append({
@@ -1002,9 +1046,13 @@ class DeanonymizeGate(SecurityGate):
 
     def _scan(self, payload: PipelinePayload) -> PipelinePayload:
         import time
-        from llm_guard.output_scanners import Deanonymize
 
         t_start = time.perf_counter()
+
+        if not _LLM_GUARD_OK:
+            return _llm_guard_skip(self.name, t_start, payload)
+
+        from llm_guard.output_scanners import Deanonymize
 
         if payload.vault is None or not payload.output_text:
             payload.metrics.append({
@@ -1156,8 +1204,6 @@ class MaliciousURLsGate(SecurityGate):
         return "malicious_urls"
 
     def _scan(self, payload: PipelinePayload) -> PipelinePayload:
-        from llm_guard.output_scanners import MaliciousURLs
-
         t_start = time.perf_counter()
 
         if not payload.output_text:
@@ -1172,7 +1218,7 @@ class MaliciousURLsGate(SecurityGate):
 
         threshold = float(self.config.get("threshold", 0.5))
 
-        # ── Layer 1: heuristic scan ───────────────────────────────────────────
+        # ── Layer 1: heuristic scan (zero-ML, always runs) ───────────────────
         # Deduplicate URLs so a URL appearing twice in the output is only checked once.
         seen: set[str] = set()
         all_urls: list[str] = []
@@ -1193,12 +1239,15 @@ class MaliciousURLsGate(SecurityGate):
         heuristic_blocked = bool(bad_urls)
         working_text = _redact_urls(payload.output_text, bad_urls) if heuristic_blocked else payload.output_text
 
-        # ── Layer 2: llm-guard ML scanner ────────────────────────────────────
-        scanner = MaliciousURLs(threshold=threshold)
-        ml_sanitized, ml_is_valid, ml_risk_score = scanner.scan(
-            payload.current_text,
-            working_text,
-        )
+        # ── Layer 2: llm-guard ML scanner (optional — skipped if not installed) ─
+        ml_sanitized, ml_is_valid, ml_risk_score = working_text, True, 0.0
+        if _LLM_GUARD_OK:
+            from llm_guard.output_scanners import MaliciousURLs
+            scanner = MaliciousURLs(threshold=threshold)
+            ml_sanitized, ml_is_valid, ml_risk_score = scanner.scan(
+                payload.current_text,
+                working_text,
+            )
 
         latency_ms   = round((time.perf_counter() - t_start) * 1000, 2)
         ml_blocked   = not ml_is_valid
@@ -1294,9 +1343,12 @@ class NoRefusalGate(SecurityGate):
         return "no_refusal"
 
     def _scan(self, payload: PipelinePayload) -> PipelinePayload:
-        from llm_guard.output_scanners import NoRefusal
-
         t_start = time.perf_counter()
+
+        if not _LLM_GUARD_OK:
+            return _llm_guard_skip(self.name, t_start, payload)
+
+        from llm_guard.output_scanners import NoRefusal
 
         if not payload.output_text:
             payload.metrics.append({
