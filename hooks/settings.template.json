@@ -36,6 +36,15 @@
             "command": "python hooks/agentic_guard.py"
           }
         ]
+      },
+      {
+        "matcher": "mcp__*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python hooks/agentic_guard.py"
+          }
+        ]
       }
     ],
     "PostToolUse": [

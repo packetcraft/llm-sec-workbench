@@ -414,8 +414,8 @@ Which Claude Code tool types are covered by hooks, and which are not.
 | `Grep` | — | No | Read-only content search |
 | `WebSearch` | — | No | No side effects; results are returned to Claude only |
 | `Agent` (subagent) | — | Partial | Subagents in the same project directory inherit hooks; isolated worktrees may not |
-| `mcp__*` | — | No | Requires separate `mcp__*` matcher. Deferred to Phase 2. |
-| `NotebookEdit` | — | No | Out of scope for Phase 1 |
+| `mcp__*` | PreToolUse | Yes | Full tool_input JSON-dumped for guard model; no allowlist applied |
+| `NotebookEdit` | — | No | Out of scope |
 
 **Coverage indicator:** The Agentic Security UI sidebar displays this table as a static reference. Unmonitored tool types are highlighted in amber so operators understand the blind spots.
 

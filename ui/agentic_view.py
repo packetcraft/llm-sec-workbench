@@ -122,8 +122,8 @@ _COVERAGE_ROWS = [
     ("Grep",        "—",                        "No",      "Read-only content search"),
     ("WebSearch",   "—",                        "No",      "No side effects"),
     ("Agent",       "—",                        "Partial", "Worktree isolation may break inheritance"),
-    ("mcp__*",      "—",                        "No",      "Phase 2 — requires separate matcher"),
-    ("NotebookEdit","—",                        "No",      "Out of scope Phase 1"),
+    ("mcp__*",      "PreToolUse",               "Yes",     "Full tool_input JSON sent to guard model"),
+    ("NotebookEdit","—",                        "No",      "Out of scope"),
 ]
 
 # ── Tab: Live Feed ────────────────────────────────────────────────────────────

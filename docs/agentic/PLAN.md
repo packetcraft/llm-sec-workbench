@@ -368,7 +368,7 @@ llm-sec-workbench/
 
 | Item | Notes |
 |:-----|:------|
-| MCP tool hook coverage | Requires `mcp__*` matcher in settings.json. Deferred to Phase 2. |
+| MCP tool hook coverage | ✅ Implemented. `mcp__*` PreToolUse matcher added to settings.json. Full tool_input JSON-dumped for classification; no allowlist applied to MCP calls. |
 | PostToolUse output scanning | Bash output exfiltration check. Included in Phase B scope but lower priority than PreToolUse. |
 | Allowlist pattern refinement | Start with read-only heuristics; tighten based on false-positive rate observed in practice. |
 | Alert on high-severity BLOCK | Real-time desktop notification when guard blocks a destructive command. Not in current scope. |

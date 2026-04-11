@@ -106,7 +106,13 @@ def _is_allowlisted(command: str, extra_patterns: list[str]) -> bool:
 # ── Tool input extraction ─────────────────────────────────────────────────────
 
 def _extract_inspectable(tool_name: str, tool_input: dict) -> str:
-    """Return the most security-relevant text from a tool input for guard model inspection."""
+    """Return the most security-relevant text from a tool input for guard model inspection.
+
+    For MCP tools (tool_name starts with ``mcp__``), the input schema varies by
+    server and tool — the full tool_input is JSON-dumped so the guard model sees
+    everything. The tool_name itself is included in the classification prompt and
+    carries useful signal (server name + operation name).
+    """
     if tool_name == "Bash":
         return tool_input.get("command", "")
     if tool_name == "WebFetch":
@@ -119,7 +125,8 @@ def _extract_inspectable(tool_name: str, tool_input: dict) -> str:
         path       = tool_input.get("file_path", "")
         new_string = tool_input.get("new_string", "")
         return f"file: {path}\n{new_string}"
-    return json.dumps(tool_input)
+    # MCP tools and any unknown tools — dump full input
+    return json.dumps(tool_input, indent=2)
 
 # ── Guard model classification ────────────────────────────────────────────────
 
