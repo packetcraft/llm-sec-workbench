@@ -453,6 +453,18 @@ def _render_sidebar(pipeline: "PipelineManager", config: dict) -> None:
                     "ENFORCE: blocks prompt when threat score \u2265 threshold."
                 ),
             ),
+            (
+                "toxicity_in",
+                "Toxicity / Sentiment (Input)",
+                (
+                    "Quality gate — detects hostile, abusive, or toxic input tone.\n"
+                    "Runs two sub-scanners: Toxicity (abusive language classifier) and\n"
+                    "Sentiment (flags extreme negativity below -0.5).\n"
+                    "AUDIT (recommended): logs verdict, never blocks on tone alone.\n"
+                    "ENFORCE: blocks prompt if toxicity or hostile sentiment detected.\n"
+                    "OFF: gate is skipped entirely."
+                ),
+            ),
         ]
 
         for gate_key, gate_label, gate_help in _CLASSIFIER_GATES:
@@ -505,6 +517,31 @@ def _render_sidebar(pipeline: "PipelineManager", config: dict) -> None:
                     "that the input-side FastScan can never see.\n"
                     "ENFORCE: redacts found PII with placeholders (e.g. [PERSON], [US_SSN]).\n"
                     "AUDIT: flags in telemetry and redacts, but does not halt the pipeline.\n"
+                    "OFF: gate is skipped entirely."
+                ),
+            ),
+            (
+                "bias_out",
+                "Bias / Toxicity (Output)",
+                (
+                    "Quality gate — detects biased or toxic content in model responses.\n"
+                    "Runs two sub-scanners: Bias (distilroberta-bias) and output-side Toxicity.\n"
+                    "Does not modify the response text — monitoring only.\n"
+                    "AUDIT (recommended): logs verdict, pipeline continues.\n"
+                    "ENFORCE: halts pipeline if bias or toxicity detected in response.\n"
+                    "OFF: gate is skipped entirely."
+                ),
+            ),
+            (
+                "relevance",
+                "Relevance (Hallucination)",
+                (
+                    "Quality gate — detects off-topic or hallucinated responses.\n"
+                    "Compares user prompt to model response using BAAI/bge-base-en-v1.5\n"
+                    "embeddings. Low cosine similarity = response drifted from the question.\n"
+                    "Does not modify the response text — monitoring only.\n"
+                    "AUDIT (recommended): logs similarity score, pipeline continues.\n"
+                    "ENFORCE: halts if similarity falls below threshold.\n"
                     "OFF: gate is skipped entirely."
                 ),
             ),
@@ -828,6 +865,52 @@ def _render_chat_area(pipeline: "PipelineManager", config: dict) -> None:
                             "model's safety training held. In a production context it may indicate "
                             "an over-restrictive safety policy.",
                             icon="🤚",
+                        )
+
+                    toxicity_in_block = next(
+                        (m for m in payload.metrics
+                         if m.get("gate_name") == "toxicity_in"
+                         and m.get("verdict") == "BLOCK"),
+                        None,
+                    )
+                    if toxicity_in_block:
+                        st.warning(
+                            f"**Hostile or toxic input detected** — "
+                            f"{toxicity_in_block['detail']}  \n"
+                            "The input tone was flagged by the Toxicity / Sentiment scanner. "
+                            "Switch the gate to ENFORCE to block such inputs.",
+                            icon="⚠️",
+                        )
+
+                    bias_out_block = next(
+                        (m for m in payload.metrics
+                         if m.get("gate_name") == "bias_out"
+                         and m.get("verdict") == "BLOCK"),
+                        None,
+                    )
+                    if bias_out_block:
+                        st.warning(
+                            f"**Biased or toxic content detected in response** — "
+                            f"{bias_out_block['detail']}  \n"
+                            "The model's response was flagged by the Bias / Toxicity output scanner. "
+                            "The response is shown as-is — switch the gate to ENFORCE to suppress it.",
+                            icon="⚠️",
+                        )
+
+                    relevance_block = next(
+                        (m for m in payload.metrics
+                         if m.get("gate_name") == "relevance"
+                         and m.get("verdict") == "BLOCK"),
+                        None,
+                    )
+                    if relevance_block:
+                        st.info(
+                            f"**Response may be off-topic** — "
+                            f"{relevance_block['detail']}  \n"
+                            "The Relevance gate found low similarity between your prompt and the "
+                            "model's response — a potential hallucination signal or sign that a "
+                            "jailbreak redirected the model's attention.",
+                            icon="🔎",
                         )
 
                 # 6. Telemetry (workbench mode only)

@@ -49,7 +49,7 @@ If a prompt fails at any gate (and the gate is in `ENFORCE` mode), execution hal
 | **Gate 1a** | `fast_scan` | `llm-guard`: `Anonymize` + `Secrets` | PII redaction, credential detection | ✅ Done |
 | **Gate 1b** | `token_limit` | `llm-guard`: `TokenLimit` (tiktoken) | Oversized prompt rejection | ✅ Done |
 | **Gate 1c** | `invisible_text` | `llm-guard`: `InvisibleText` | Unicode steganography / hidden chars | ✅ Done |
-| **Gate 1d** | `toxicity_in` | `llm-guard`: `Toxicity` + `Sentiment` | Hostile / abusive input tone | Phase 3+ |
+| **Gate 1d** | `toxicity_in` | `llm-guard`: `Toxicity` + `Sentiment` | Hostile / abusive input tone | ✅ Done |
 | **Gate 1e** | `ban_topics` | `llm-guard`: `BanTopics` | Off-limits subject matter (zero-shot) | Phase 3+ |
 | **Gate 2** | `classify` | `deberta-v3-base-prompt-injection-v2` | Fast injection/jailbreak classification | ✅ Done |
 | **Gate 3** | `mod_llm` | `Llama-Guard-3` (Ollama) | Detailed safety taxonomies (LLM judge) | Phase 4 |
@@ -69,8 +69,8 @@ If a prompt fails at any gate (and the gate is in `ENFORCE` mode), execution hal
 | **Gate B** | `sensitive_out` | `llm-guard`: `Sensitive` (Presidio) | PII that the LLM generated itself | ✅ Done |
 | **Gate C** | `malicious_urls` | Heuristic layer + `llm-guard`: `MaliciousURLs` | Dangerous/phishing links in responses | ✅ Done |
 | **Gate D** | `no_refusal` | `llm-guard`: `NoRefusal` | Detects model refusals (red-team + over-blocking) | ✅ Done |
-| **Gate E** | `bias_toxicity` | `llm-guard`: `Bias` + `Toxicity` | Biased or abusive model output | Phase 3+ |
-| **Gate F** | `relevance` | `llm-guard`: `Relevance` (BAAI embeddings) | Off-topic / hallucinated responses | Phase 3+ |
+| **Gate E** | `bias_out` | `llm-guard`: `Bias` + `Toxicity` (output) | Biased or abusive model output | ✅ Done |
+| **Gate F** | `relevance` | `llm-guard`: `Relevance` (BAAI embeddings) | Off-topic / hallucinated responses | ✅ Done |
 | **Gate G** | `structure` | `little-canary` (Python) | Behavioral/JSON integrity probes | Phase 5 |
 | **Gate H** | `airs_dual` | Prisma AIRS (Cloud API) | Output DLP + malware scanning | Phase 4 |
 

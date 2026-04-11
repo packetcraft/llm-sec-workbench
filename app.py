@@ -143,9 +143,12 @@ def _init_session_state(config: dict) -> None:
         "invisible_text": "ENFORCE",  # Phase 3 — Unicode steganography (zero-ML)
         "fast_scan":      "AUDIT",    # Phase 3 — PII / Secrets scanner
         "classify":       "AUDIT",    # Phase 3 — Prompt-Guard injection classifier
+        "toxicity_in":    "AUDIT",    # Phase 3 — Hostile/toxic input tone (quality)
         "sensitive_out":  "AUDIT",    # Phase 3 — Output-side PII scan (LLM-generated PII)
         "malicious_urls": "ENFORCE",  # Phase 3 — Malicious URL detection (output gate)
         "no_refusal":     "AUDIT",    # Phase 3 — Model refusal detection (output gate)
+        "bias_out":       "AUDIT",    # Phase 3 — Biased/toxic output (quality)
+        "relevance":      "AUDIT",    # Phase 3 — Off-topic / hallucination (quality)
         "deanonymize":    "ENFORCE",  # Phase 3 — PII restoration (output gate)
     }
     for gate_key, gate_default in gate_defaults.items():
@@ -207,6 +210,7 @@ def main() -> None:
         TokenLimitGate, InvisibleTextGate,
         FastScanGate, PromptGuardGate, DeanonymizeGate,
         SensitiveGate, MaliciousURLsGate, NoRefusalGate,
+        ToxicityInputGate, BiasOutputGate, RelevanceGate,
     )
 
     thresholds = config.get("thresholds", {})
@@ -247,6 +251,19 @@ def main() -> None:
         "threshold": thresholds.get("no_refusal", 0.5),
     })
 
+    toxicity_in_gate = ToxicityInputGate(config={
+        "toxicity_threshold":  thresholds.get("toxicity_in", 0.5),
+        "sentiment_threshold": thresholds.get("sentiment_in", -0.5),
+    })
+
+    bias_out_gate = BiasOutputGate(config={
+        "threshold": thresholds.get("bias_out", 0.5),
+    })
+
+    relevance_gate = RelevanceGate(config={
+        "threshold": thresholds.get("relevance", 0.5),
+    })
+
     pipeline = PipelineManager(
         client=client,
         input_gates=[
@@ -255,11 +272,14 @@ def main() -> None:
             ("invisible_text", invisible_text_gate),
             ("fast_scan",      fast_scan_gate),
             ("classify",       classify_gate),
+            ("toxicity_in",    toxicity_in_gate),    # quality: hostile input tone
         ],
         output_gates=[
             ("sensitive_out",  sensitive_gate),      # redact LLM-generated PII
             ("malicious_urls", malicious_urls_gate), # block malicious URLs
             ("no_refusal",     no_refusal_gate),     # detect model refusals
+            ("bias_out",       bias_out_gate),       # quality: biased/toxic output
+            ("relevance",      relevance_gate),      # quality: off-topic / hallucination
             ("deanonymize",    deanonymize_gate),    # restore user-provided PII last
             # Phase 4: ("airs_dual", AIRSDualGate(...))
         ],
