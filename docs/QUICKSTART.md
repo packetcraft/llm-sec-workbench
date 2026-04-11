@@ -156,6 +156,143 @@ By default, all gates start in `AUDIT` mode. You can change each gate independen
 
 ---
 
+## Agentic Security Setup
+
+The Agentic Security Monitor intercepts Claude Code tool calls (Bash, Edit, Write, WebFetch) using Claude Code hook events, classifies them with a local Ollama guard model, and writes structured audit records to `audit/`. The dedicated **Agentic Security** view in the app lets you review and query the full audit history.
+
+> This setup is **independent of the main chatbot pipeline**. You do not need the chatbot models pulled or Ollama running for the Agentic Security UI — it reads from local JSONL files only.
+
+### Step A — Pull the Guard Model
+
+The hook uses a small, fast model to stay below the synchronous latency budget (sub-200ms target):
+
+```bash
+ollama pull qwen2.5:1.5b
+```
+
+Fallback if VRAM is constrained:
+
+```bash
+ollama pull tinyllama
+```
+
+Update `config.yaml` to match whichever model you pulled:
+
+```yaml
+agentic:
+  guard_model: "qwen2.5:1.5b"   # or "tinyllama"
+```
+
+### Step B — Register the Hooks
+
+Claude Code hooks are configured in `.claude/settings.json`. This file is gitignored (kept local). Copy the committed template:
+
+**Windows (Git Bash):**
+```bash
+cp hooks/settings.template.json .claude/settings.json
+```
+
+**Windows (PowerShell):**
+```powershell
+Copy-Item hooks\settings.template.json .claude\settings.json
+```
+
+This registers `PreToolUse` hooks for `Bash`, `Edit`, `Write`, and `WebFetch`, plus a `PostToolUse` hook for `Bash` (output exfiltration audit).
+
+> **Note:** `.claude/settings.json` may already exist with your permission rules in `settings.local.json`. The hooks file is separate — both files are read by Claude Code independently.
+
+### Step C — Understand `audit_only` Mode
+
+By default the hook runs in **audit-only mode** (`audit_only: true` in `config.yaml`). In this mode:
+
+| Verdict | What happens |
+|:--------|:-------------|
+| `ALLOW` | Tool call proceeds. Logged. |
+| `ALLOWLISTED` | Tool call proceeds. Logged. No Ollama call made. |
+| `BLOCK` | Tool call **proceeds** (not blocked). Logged as "would have blocked". Stderr shows `[agentic-guard] AUDIT: would have blocked — <reason>`. |
+| `ERROR` | Ollama unreachable or timed out. Tool call proceeds. Logged. |
+
+Switch to enforcement mode when you want BLOCK verdicts to actually prevent tool calls:
+
+```yaml
+agentic:
+  audit_only: false   # exit 2 on BLOCK — Claude Code cancels the tool call
+```
+
+**Recommendation:** Keep `audit_only: true` during active development. Switch to `false` for security review sessions.
+
+### Step D — Verify the Hook Fires
+
+Start a Claude Code session in this project:
+
+```bash
+claude
+```
+
+Ask Claude anything that triggers a tool call — for example:
+> "What's the current git branch?"
+
+Then check the audit directory:
+
+```bash
+ls audit/
+```
+
+A file named `audit/{session_id}.jsonl` should appear (UUID-style name from Claude Code's session). Inspect it:
+
+```bash
+python -c "
+import json, sys
+fname = sys.argv[1]
+with open(fname) as f:
+    for line in f:
+        r = json.loads(line)
+        print(r['event_type'], '|', r.get('tool_name',''), '|', r.get('verdict',''), '|', r.get('latency_ms',''), 'ms')
+" audit/<your-session-id>.jsonl
+```
+
+The first line should be `SESSION_START` followed by `TOOL_CALL` records with verdicts of `ALLOWLISTED`, `ALLOW`, `BLOCK`, or `ERROR`.
+
+### Step E — Open the Agentic Security View
+
+```bash
+streamlit run app.py
+```
+
+Navigate to **Agentic Security** in the sidebar. Three tabs:
+
+| Tab | Purpose |
+|:----|:--------|
+| **Live Feed** | Auto-refreshing table of the 50 most recent hook events |
+| **Audit Explorer** | Filter by session, tool, verdict, date, keyword — click rows for detail |
+| **Dashboard** | Aggregate KPIs, block rate trend, latency histogram, session timeline |
+
+### Agentic Security Troubleshooting
+
+**`audit/` directory is empty after a Claude Code session**
+- Confirm `.claude/settings.json` exists and contains the hook matchers.
+- Confirm `qwen2.5:1.5b` (or your configured `guard_model`) is pulled: `ollama list`.
+- Run a command that triggers a tool call (e.g. ask Claude to read a file) — `git status` is allowlisted and still creates a record.
+
+**Hook creates a file but with a UUID name, not my test `$SID`**
+- Expected. Claude Code assigns its own session ID. The UUID is the real session ID for that Claude Code invocation. Use `ls audit/` to find the file and inspect it directly.
+
+**Everything is `verdict: ERROR` with `"timeout after 5000ms"`**
+- Ollama is not running or the guard model is not pulled.
+- Start Ollama: `ollama serve` (or open the Ollama desktop app).
+- Pull the model: `ollama pull qwen2.5:1.5b`.
+- The hook fails open on error — tool calls are never blocked, but no classification is logged.
+
+**Hook is blocking my Edit/Write tool calls**
+- You are in enforcement mode (`audit_only: false`) and the guard model is flagging file edits.
+- Switch to `audit_only: true` in `config.yaml` during development.
+- Alternatively, remove the `Edit` and `Write` matchers from `.claude/settings.json` to limit hook coverage to `Bash` and `WebFetch` only.
+
+**`ZoneInfoNotFoundError` in the Streamlit UI**
+- Windows does not ship timezone data. The app uses `datetime.now().astimezone()` to avoid this — ensure you are running the latest code (`git pull`).
+
+---
+
 ## Troubleshooting
 
 **App shows "Connection refused" when calling Ollama**
