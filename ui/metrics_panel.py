@@ -56,6 +56,14 @@ _VERDICT_COLORS = {
 
 _SPARK_CHARS = "▁▂▃▄▅▆▇█"
 
+_VERDICT_EMOJI: dict[str, str] = {
+    "PASS":  "🟢",
+    "BLOCK": "🔴",
+    "ERROR": "🟠",
+    "SKIP":  "⚫",
+    "AUDIT": "🟡",
+}
+
 
 # ── Cached model-info fetcher ─────────────────────────────────────────────────
 
@@ -610,14 +618,106 @@ def render_telemetry_panel(ollama_host: str, model_name: str) -> None:
 
 # ── 1. API Inspector ──────────────────────────────────────────────────────────
 
+def _build_inspector_json(raw_traces: dict, metrics: list[dict]) -> str:
+    """Serialize full conversation + telemetry + gate traces as JSON."""
+    import datetime
+    messages = st.session_state.get("messages", [])
+    tel      = st.session_state.get("last_telemetry", {})
+    export   = {
+        "exported_at": datetime.datetime.now().isoformat(),
+        "conversation": [
+            {"role": m.get("role", ""), "content": m.get("content", "")}
+            for m in messages
+        ],
+        "telemetry": {k: v for k, v in tel.items() if k != "gate_metrics"},
+        "gate_metrics": metrics,
+        "gate_traces":  raw_traces,
+    }
+    return json.dumps(export, indent=2, default=str)
+
+
+def _build_inspector_md(raw_traces: dict, metrics: list[dict]) -> str:
+    """Serialize full conversation + telemetry + gate traces as Markdown."""
+    import datetime
+    messages = st.session_state.get("messages", [])
+    tel      = st.session_state.get("last_telemetry", {})
+
+    lines: list[str] = [
+        "# LLM Security Workbench — Session Export",
+        f"*Exported: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*",
+        "",
+        "---",
+        "",
+        "## Conversation",
+        "",
+    ]
+    for m in messages:
+        role    = m.get("role", "")
+        content = m.get("content", "")
+        prefix  = "**User:**" if role == "user" else "**Assistant:**"
+        lines.append(f"{prefix} {content}")
+        lines.append("")
+
+    lines += [
+        "---",
+        "",
+        "## Gate Metrics",
+        "",
+        "| Gate | Verdict | Score | Latency (ms) | Detail |",
+        "|:-----|:--------|------:|-------------:|:-------|",
+    ]
+    for m in metrics:
+        emoji = _VERDICT_EMOJI.get(m.get("verdict", ""), "")
+        lines.append(
+            f"| {m.get('gate_name', '')} "
+            f"| {emoji} {m.get('verdict', '')} "
+            f"| {m.get('score', 0.0):.4f} "
+            f"| {m.get('latency_ms', 0.0):.1f} "
+            f"| {m.get('detail', '')} |"
+        )
+
+    lines += ["", "---", "", "## Telemetry", ""]
+    tel_display = {k: v for k, v in tel.items() if k != "gate_metrics"}
+    for k, v in tel_display.items():
+        lines.append(f"- **{k}**: {v}")
+
+    lines += ["", "---", "", "## Raw Gate Traces", ""]
+    for gate_name, trace in raw_traces.items():
+        metric  = next((m for m in metrics if m.get("gate_name") == gate_name), None)
+        verdict = metric.get("verdict", "?") if metric else "?"
+        emoji   = _VERDICT_EMOJI.get(verdict, "")
+        lines += [
+            f"### {emoji} {gate_name} ({verdict})",
+            "",
+            "**Request:**",
+            "```json",
+            json.dumps(trace.get("request", {}), indent=2, default=str),
+            "```",
+            "",
+            "**Response:**",
+            "```json",
+            json.dumps(trace.get("response", {}), indent=2, default=str),
+            "```",
+            "",
+        ]
+
+    return "\n".join(lines)
+
+
 def render_api_inspector(
     raw_traces: dict,
     metrics: list[dict],
 ) -> None:
-    """Collapsible expander with one tab per gate — request/response JSON side by side."""
+    """Collapsible expander with one tab per gate — request/response JSON side by side.
+
+    Tab labels are prefixed with a verdict emoji (🟢 PASS / 🔴 BLOCK / 🟠 ERROR / ⚫ SKIP).
+    Export buttons in the header row produce a full-session JSON or Markdown download
+    that includes the conversation, telemetry, gate metrics, and raw gate traces.
+    """
     if not raw_traces:
         return
 
+    # Build ordered gate list (pipeline order via metrics, then any extras)
     ordered_names: list[str] = []
     seen: set[str] = set()
     for m in metrics:
@@ -629,8 +729,53 @@ def render_api_inspector(
         if name not in seen:
             ordered_names.append(name)
 
+    # Build a verdict lookup for tab labelling
+    verdict_map: dict[str, str] = {
+        m.get("gate_name", ""): m.get("verdict", "") for m in metrics
+    }
+
     with st.expander("🔍 API Inspector — raw gate traces", expanded=False):
-        tabs = st.tabs([f"`{n}`" for n in ordered_names])
+
+        # ── Export row ────────────────────────────────────────────────────────
+        import datetime
+        ts         = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        json_bytes = _build_inspector_json(raw_traces, metrics).encode()
+        md_bytes   = _build_inspector_md(raw_traces, metrics).encode()
+
+        exp_left, exp_right, _ = st.columns([1, 1, 5])
+        with exp_left:
+            st.download_button(
+                label="⬇ JSON",
+                data=json_bytes,
+                file_name=f"workbench_trace_{ts}.json",
+                mime="application/json",
+                use_container_width=True,
+                key=f"dl_json_{ts}",
+            )
+        with exp_right:
+            st.download_button(
+                label="⬇ MD",
+                data=md_bytes,
+                file_name=f"workbench_trace_{ts}.md",
+                mime="text/markdown",
+                use_container_width=True,
+                key=f"dl_md_{ts}",
+            )
+
+        st.markdown(
+            f"<div style='font-size:0.68rem;color:{_C_DIM};margin-bottom:6px'>"
+            f"Export includes full conversation, telemetry and gate traces.</div>",
+            unsafe_allow_html=True,
+        )
+
+        # ── Gate tabs ─────────────────────────────────────────────────────────
+        # Tab label = verdict emoji + short gate name
+        tab_labels = [
+            f"{_VERDICT_EMOJI.get(verdict_map.get(n, ''), '⬜')} {n}"
+            for n in ordered_names
+        ]
+        tabs = st.tabs(tab_labels)
+
         for tab, gate_name in zip(tabs, ordered_names):
             with tab:
                 trace  = raw_traces[gate_name]
@@ -654,9 +799,10 @@ def render_api_inspector(
                     score   = metric.get("score", 0.0)
                     detail  = metric.get("detail", "")
                     color   = _VERDICT_COLORS.get(verdict, "#888888")
+                    emoji   = _VERDICT_EMOJI.get(verdict, "")
                     st.markdown(
-                        f"<span style='color:{color};font-weight:600'>"
-                        f"verdict: {verdict}</span>"
+                        f"<span style='color:{color};font-weight:700'>"
+                        f"{emoji} verdict: {verdict}</span>"
                         f"&nbsp;&nbsp;|&nbsp;&nbsp;latency: **{latency:.1f} ms**"
                         f"&nbsp;&nbsp;|&nbsp;&nbsp;score: **{score:.3f}**",
                         unsafe_allow_html=True,
