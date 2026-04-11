@@ -31,4 +31,13 @@ torch>=2.2.0
 torchvision>=0.17.0
 transformers>=4.40.0
 onnxruntime>=1.18.0
-llm-guard>=0.3.16
+
+# ── llm-guard (OPTIONAL — requires Python <=3.12) ────────────────────────────
+# llm-guard pulls in sentencepiece, which has no pre-built wheels for Python
+# 3.13+ and cannot be compiled without MSVC / cmake on Windows.
+#
+#   • Python 3.12 or earlier → pip install llm-guard==0.3.10
+#   • Python 3.13+           → skip; gates that need it degrade to SKIP verdict
+#
+# Uncomment the line below ONLY if your environment is Python <=3.12:
+# llm-guard==0.3.10
