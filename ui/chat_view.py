@@ -212,28 +212,34 @@ def render(pipeline: "PipelineManager", config: dict) -> None:
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 
-_SIDEBAR_CSS_INJECTED = False   # inject once per app lifetime (module-level flag)
-
-
 def _inject_sidebar_css() -> None:
     """Inject CSS that scales all native sidebar widgets down to match the
-    0.72 rem custom-HTML labels, giving a compact uniform look."""
-    global _SIDEBAR_CSS_INJECTED
-    if _SIDEBAR_CSS_INJECTED:
-        return
-    _SIDEBAR_CSS_INJECTED = True
+    0.72 rem custom-HTML labels, giving a compact uniform look.
+    Called on every render — Streamlit de-dupes identical <style> blocks."""
     st.markdown(
         """
         <style>
-        /* ── Selectbox: value text + control height ───────────────────── */
-        section[data-testid="stSidebar"] [data-baseweb="select"] span,
-        section[data-testid="stSidebar"] [data-baseweb="select"] div {
+        /* ── Selectbox: all descendants (universal selector) ─────────── */
+        section[data-testid="stSidebar"] [data-baseweb="select"] * {
+            font-size: 0.72rem !important;
+            line-height: 1.3 !important;
+        }
+        /* ── Specific BaseWeb value elements ─────────────────────────── */
+        section[data-testid="stSidebar"] [data-baseweb="single-value"],
+        section[data-testid="stSidebar"] [data-baseweb="placeholder"],
+        section[data-testid="stSidebar"] [data-baseweb="value"] {
             font-size: 0.72rem !important;
         }
+        /* ── Selectbox control height ─────────────────────────────────── */
         section[data-testid="stSidebar"] [data-baseweb="select"] > div {
             min-height: 28px !important;
             padding-top: 2px !important;
             padding-bottom: 2px !important;
+        }
+        /* ── StSelectbox wrapper ──────────────────────────────────────── */
+        section[data-testid="stSidebar"] .stSelectbox *,
+        section[data-testid="stSidebar"] div[data-testid="stSelectbox"] * {
+            font-size: 0.72rem !important;
         }
         /* ── Text inputs ──────────────────────────────────────────────── */
         section[data-testid="stSidebar"] .stTextInput input,
