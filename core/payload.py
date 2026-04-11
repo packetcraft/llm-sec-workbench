@@ -55,6 +55,12 @@ class PipelinePayload:
     completion_tokens: int = 0
     tokens_per_second: float = 0.0
 
+    # ── Ollama timing breakdown (Phase 5 — Live Telemetry Panel) ─────────────
+    load_ms: float = 0.0          # model load time (ms); 0 when already warm
+    prompt_eval_ms: float = 0.0   # prompt encoding time (ms)
+    generation_ms: float = 0.0    # token generation time (ms)
+    done_reason: str = ""         # "stop" | "length" | "context" | ""
+
     # ── Raw API traces (for API Inspector, Phase 5) ───────────────────────────
     # Keyed by gate name; each value is {"request": {...}, "response": {...}}
     raw_traces: dict = field(default_factory=dict)

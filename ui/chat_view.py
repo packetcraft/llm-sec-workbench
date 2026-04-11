@@ -870,6 +870,10 @@ def _render_chat_area(pipeline: "PipelineManager", config: dict) -> None:
                     payload.prompt_tokens = stream_result.prompt_tokens
                     payload.completion_tokens = stream_result.completion_tokens
                     payload.tokens_per_second = stream_result.tokens_per_second
+                    payload.load_ms = stream_result.load_ms
+                    payload.prompt_eval_ms = stream_result.prompt_eval_ms
+                    payload.generation_ms = stream_result.generation_ms
+                    payload.done_reason = stream_result.done_reason
 
                 # 4. Run output gates on the completed response
                 payload = pipeline.run_output_gates(payload, gate_modes)
@@ -1065,9 +1069,13 @@ def _render_chat_area(pipeline: "PipelineManager", config: dict) -> None:
             "gate_metrics": payload.metrics,
             "raw_traces": dict(payload.raw_traces),
             "telemetry": {
-                "prompt_tokens": payload.prompt_tokens,
+                "prompt_tokens":    payload.prompt_tokens,
                 "completion_tokens": payload.completion_tokens,
                 "tokens_per_second": payload.tokens_per_second,
+                "load_ms":          payload.load_ms,
+                "prompt_eval_ms":   payload.prompt_eval_ms,
+                "generation_ms":    payload.generation_ms,
+                "done_reason":      payload.done_reason,
             },
         })
 

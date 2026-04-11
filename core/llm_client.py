@@ -36,12 +36,32 @@ class GenerationResult:
     ``output_text`` is populated by ``generate()``.
     For ``generate_stream()``, callers accumulate text themselves; retrieve
     token counts afterward via ``OllamaClient.get_stream_result()``.
+
+    Ollama timing fields (Phase 5 — Live Telemetry Panel)
+    ------------------------------------------------------
+    All three timing fields are converted from nanoseconds to milliseconds
+    on capture so callers never deal with raw ns values.
+
+    load_ms         Time Ollama spent loading the model into VRAM/RAM.
+                    Near-zero when the model was already warm; significant
+                    on first use or after an idle unload.
+    prompt_eval_ms  Time spent evaluating (encoding) the input prompt tokens.
+    generation_ms   Pure token generation time (eval phase).
+    done_reason     Why Ollama stopped: ``"stop"`` (natural end-of-sequence),
+                    ``"length"`` (max_tokens hit), ``"context"`` (context
+                    window exhausted), or ``""`` if not reported.
     """
 
     output_text: str = ""
     prompt_tokens: int = 0
     completion_tokens: int = 0
     tokens_per_second: float = 0.0
+
+    # ── Ollama timing breakdown (Phase 5) ─────────────────────────────────────
+    load_ms: float = 0.0
+    prompt_eval_ms: float = 0.0
+    generation_ms: float = 0.0
+    done_reason: str = ""
 
 
 # ── Abstract base ──────────────────────────────────────────────────────────────
@@ -204,16 +224,22 @@ class OllamaClient(BaseLLMClient):
             if content:
                 yield content
 
-            # The final chunk carries token counts but empty content.
+            # The final chunk carries token counts and timing but empty content.
             if getattr(chunk, "done", False):
-                eval_ns = int(getattr(chunk, "eval_duration", 0) or 0)
-                completion = int(getattr(chunk, "eval_count", 0) or 0)
+                eval_ns         = int(getattr(chunk, "eval_duration",        0) or 0)
+                load_ns         = int(getattr(chunk, "load_duration",        0) or 0)
+                prompt_eval_ns  = int(getattr(chunk, "prompt_eval_duration", 0) or 0)
+                completion      = int(getattr(chunk, "eval_count",           0) or 0)
                 self._last_stream_meta = {
-                    "prompt_tokens": int(getattr(chunk, "prompt_eval_count", 0) or 0),
+                    "prompt_tokens":    int(getattr(chunk, "prompt_eval_count", 0) or 0),
                     "completion_tokens": completion,
                     "tokens_per_second": (
                         completion / (eval_ns / 1e9) if eval_ns > 0 else 0.0
                     ),
+                    "load_ms":          load_ns        / 1_000_000,
+                    "prompt_eval_ms":   prompt_eval_ns / 1_000_000,
+                    "generation_ms":    eval_ns        / 1_000_000,
+                    "done_reason":      str(getattr(chunk, "done_reason", "") or ""),
                 }
 
     def get_stream_result(self) -> GenerationResult:
@@ -228,6 +254,10 @@ class OllamaClient(BaseLLMClient):
             prompt_tokens=m.get("prompt_tokens", 0),
             completion_tokens=m.get("completion_tokens", 0),
             tokens_per_second=m.get("tokens_per_second", 0.0),
+            load_ms=m.get("load_ms", 0.0),
+            prompt_eval_ms=m.get("prompt_eval_ms", 0.0),
+            generation_ms=m.get("generation_ms", 0.0),
+            done_reason=m.get("done_reason", ""),
         )
 
     # ── Internal helpers ───────────────────────────────────────────────────────
@@ -235,8 +265,10 @@ class OllamaClient(BaseLLMClient):
     @staticmethod
     def _result_from_response(response) -> GenerationResult:
         """Extract a ``GenerationResult`` from a non-streaming Ollama response."""
-        eval_ns = int(getattr(response, "eval_duration", 0) or 0)
-        completion = int(getattr(response, "eval_count", 0) or 0)
+        eval_ns        = int(getattr(response, "eval_duration",        0) or 0)
+        load_ns        = int(getattr(response, "load_duration",        0) or 0)
+        prompt_eval_ns = int(getattr(response, "prompt_eval_duration", 0) or 0)
+        completion     = int(getattr(response, "eval_count",           0) or 0)
         return GenerationResult(
             output_text=response.message.content,
             prompt_tokens=int(getattr(response, "prompt_eval_count", 0) or 0),
@@ -244,4 +276,8 @@ class OllamaClient(BaseLLMClient):
             tokens_per_second=(
                 completion / (eval_ns / 1e9) if eval_ns > 0 else 0.0
             ),
+            load_ms=load_ns        / 1_000_000,
+            prompt_eval_ms=prompt_eval_ns / 1_000_000,
+            generation_ms=eval_ns  / 1_000_000,
+            done_reason=str(getattr(response, "done_reason", "") or ""),
         )
