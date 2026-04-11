@@ -698,8 +698,18 @@ def _render_chat_area(pipeline: "PipelineManager", config: dict) -> None:
     right and reads from ``st.session_state.last_telemetry`` (populated after
     each generation) so the panel never adds latency to idle re-runs.
     """
+    # st.chat_input MUST be called at this outer scope — not inside any column.
+    # When placed inside st.columns() it loses its bottom-of-page sticky
+    # behaviour and renders inline, pushing messages below the input box.
+    placeholder = (
+        "Message the assistant…"
+        if st.session_state.demo_mode
+        else "Send a prompt to the workbench…"
+    )
+    prompt = st.chat_input(placeholder)
+
     if st.session_state.demo_mode:
-        _render_chat_content(pipeline, config)
+        _render_chat_content(pipeline, config, prompt)
         return
 
     _ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
@@ -707,12 +717,12 @@ def _render_chat_area(pipeline: "PipelineManager", config: dict) -> None:
 
     chat_col, tel_col = st.columns([3, 1], gap="medium")
     with chat_col:
-        _render_chat_content(pipeline, config)
+        _render_chat_content(pipeline, config, prompt)
     with tel_col:
         render_telemetry_panel(_ollama_host, _model)
 
 
-def _render_chat_content(pipeline: "PipelineManager", config: dict) -> None:
+def _render_chat_content(pipeline: "PipelineManager", config: dict, prompt: str | None = None) -> None:
     # ── Header ─────────────────────────────────────────────────────────────────
     if st.session_state.demo_mode:
         st.markdown(
@@ -820,13 +830,10 @@ def _render_chat_content(pipeline: "PipelineManager", config: dict) -> None:
                     render_api_inspector(msg["raw_traces"], msg.get("gate_metrics") or [])
 
     # ── Chat input ─────────────────────────────────────────────────────────────
-    placeholder = (
-        "Message the assistant…"
-        if st.session_state.demo_mode
-        else "Send a prompt to the workbench…"
-    )
+    # prompt is captured by _render_chat_area() at the outer scope so that
+    # st.chat_input sticks to the bottom of the page even inside columns.
 
-    if prompt := st.chat_input(placeholder):
+    if prompt:
         # 1. Store and display user message
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
