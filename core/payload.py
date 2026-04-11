@@ -60,6 +60,7 @@ class PipelinePayload:
     prompt_eval_ms: float = 0.0   # prompt encoding time (ms)
     generation_ms: float = 0.0    # token generation time (ms)
     done_reason: str = ""         # "stop" | "length" | "context" | ""
+    ttft_ms: float = 0.0          # time from request start to first token (ms)
 
     # ── Raw API traces (for API Inspector, Phase 5) ───────────────────────────
     # Keyed by gate name; each value is {"request": {...}, "response": {...}}

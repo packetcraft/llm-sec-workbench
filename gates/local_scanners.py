@@ -100,21 +100,19 @@ class TokenLimitGate(SecurityGate):
         return "token_limit"
 
     def _scan(self, payload: PipelinePayload) -> PipelinePayload:
-        from llm_guard.input_scanners import TokenLimit
+        import tiktoken
 
         t_start = time.perf_counter()
 
         limit         = int(self.config.get("limit", 512))
         encoding_name = str(self.config.get("encoding_name", "cl100k_base"))
 
-        scanner = TokenLimit(limit=limit, encoding_name=encoding_name)
-        _, is_valid, risk_score = scanner.scan(payload.original_input)
+        enc         = tiktoken.get_encoding(encoding_name)
+        token_count = len(enc.encode(payload.original_input))
+        is_valid    = token_count <= limit
+        risk_score  = round(min(1.0, token_count / limit) if limit > 0 else 1.0, 4)
 
         latency_ms = round((time.perf_counter() - t_start) * 1000, 2)
-
-        import tiktoken
-        enc = tiktoken.get_encoding(encoding_name)
-        token_count = len(enc.encode(payload.original_input))
 
         payload.raw_traces[self.name] = {
             "request": {
@@ -125,7 +123,7 @@ class TokenLimitGate(SecurityGate):
             "response": {
                 "token_count": token_count,
                 "is_valid":    is_valid,
-                "risk_score":  round(float(risk_score), 4),
+                "risk_score":  risk_score,
             },
         }
 
@@ -137,7 +135,7 @@ class TokenLimitGate(SecurityGate):
             payload.metrics.append({
                 "gate_name":  self.name,
                 "latency_ms": latency_ms,
-                "score":      round(float(risk_score), 4),
+                "score":      risk_score,
                 "verdict":    "BLOCK",
                 "detail":     payload.block_reason,
             })
@@ -145,7 +143,7 @@ class TokenLimitGate(SecurityGate):
             payload.metrics.append({
                 "gate_name":  self.name,
                 "latency_ms": latency_ms,
-                "score":      round(float(risk_score), 4),
+                "score":      risk_score,
                 "verdict":    "PASS",
                 "detail":     f"{token_count} tokens — within limit of {limit}.",
             })
@@ -178,13 +176,27 @@ class InvisibleTextGate(SecurityGate):
     def name(self) -> str:
         return "invisible_text"
 
+    # Unicode categories that are invisible to humans but interpretable by LLMs.
+    # Cf = Format (zero-width joiners, directional overrides, soft hyphens)
+    # Cc = Control (ASCII controls outside normal whitespace)
+    # Co = Private Use Area
+    # Cn = Unassigned code points
+    _INVISIBLE_CATS: frozenset = frozenset({"Cf", "Cc", "Co", "Cn"})
+    # Normal whitespace control chars that are always allowed.
+    _ALLOWED_CC: frozenset = frozenset({"\t", "\n", "\r"})
+
     def _scan(self, payload: PipelinePayload) -> PipelinePayload:
-        from llm_guard.input_scanners import InvisibleText
+        import unicodedata as _ud
 
         t_start = time.perf_counter()
 
-        scanner = InvisibleText()
-        _, is_valid, risk_score = scanner.scan(payload.original_input)
+        invisible = [
+            ch for ch in payload.original_input
+            if _ud.category(ch) in self._INVISIBLE_CATS
+            and ch not in self._ALLOWED_CC
+        ]
+        is_valid   = len(invisible) == 0
+        risk_score = round(min(1.0, len(invisible) / 10), 4) if invisible else 0.0
 
         latency_ms = round((time.perf_counter() - t_start) * 1000, 2)
 
@@ -192,7 +204,7 @@ class InvisibleTextGate(SecurityGate):
             "request":  {"text_checked": payload.original_input},
             "response": {
                 "is_valid":   is_valid,
-                "risk_score": round(float(risk_score), 4),
+                "risk_score": risk_score,
             },
         }
 
@@ -204,7 +216,7 @@ class InvisibleTextGate(SecurityGate):
             payload.metrics.append({
                 "gate_name":  self.name,
                 "latency_ms": latency_ms,
-                "score":      round(float(risk_score), 4),
+                "score":      risk_score,
                 "verdict":    "BLOCK",
                 "detail":     payload.block_reason,
             })

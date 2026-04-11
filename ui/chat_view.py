@@ -900,6 +900,7 @@ def _render_chat_content(pipeline: "PipelineManager", config: dict, prompt: str 
                     payload.prompt_eval_ms = getattr(stream_result, "prompt_eval_ms", 0.0)
                     payload.generation_ms  = getattr(stream_result, "generation_ms",  0.0)
                     payload.done_reason    = getattr(stream_result, "done_reason",    "")
+                    payload.ttft_ms        = getattr(stream_result, "ttft_ms",        0.0)
 
                 # 4. Run output gates on the completed response
                 payload = pipeline.run_output_gates(payload, gate_modes)
@@ -1117,6 +1118,7 @@ def _render_chat_content(pipeline: "PipelineManager", config: dict, prompt: str 
                 "prompt_eval_ms":   payload.prompt_eval_ms,
                 "generation_ms":    payload.generation_ms,
                 "done_reason":      payload.done_reason,
+                "ttft_ms":          payload.ttft_ms,
             },
         })
 

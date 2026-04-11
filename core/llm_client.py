@@ -62,6 +62,7 @@ class GenerationResult:
     prompt_eval_ms: float = 0.0
     generation_ms: float = 0.0
     done_reason: str = ""
+    ttft_ms: float = 0.0   # time from request to first token (ms)
 
 
 # ── Abstract base ──────────────────────────────────────────────────────────────
@@ -212,7 +213,11 @@ class OllamaClient(BaseLLMClient):
             full_text = st.write_stream(client.generate_stream(messages, opts))
             result    = client.get_stream_result()
         """
+        import time as _time
         self._last_stream_meta = {}
+        _request_start  = _time.perf_counter()
+        _ttft_ms        = 0.0
+        _ttft_recorded  = False
 
         for chunk in self._client.chat(
             model=self.model,
@@ -222,6 +227,9 @@ class OllamaClient(BaseLLMClient):
         ):
             content: str = getattr(chunk.message, "content", "") or ""
             if content:
+                if not _ttft_recorded:
+                    _ttft_ms       = (_time.perf_counter() - _request_start) * 1000
+                    _ttft_recorded = True
                 yield content
 
             # The final chunk carries token counts and timing but empty content.
@@ -231,15 +239,16 @@ class OllamaClient(BaseLLMClient):
                 prompt_eval_ns  = int(getattr(chunk, "prompt_eval_duration", 0) or 0)
                 completion      = int(getattr(chunk, "eval_count",           0) or 0)
                 self._last_stream_meta = {
-                    "prompt_tokens":    int(getattr(chunk, "prompt_eval_count", 0) or 0),
+                    "prompt_tokens":     int(getattr(chunk, "prompt_eval_count", 0) or 0),
                     "completion_tokens": completion,
                     "tokens_per_second": (
                         completion / (eval_ns / 1e9) if eval_ns > 0 else 0.0
                     ),
-                    "load_ms":          load_ns        / 1_000_000,
-                    "prompt_eval_ms":   prompt_eval_ns / 1_000_000,
-                    "generation_ms":    eval_ns        / 1_000_000,
-                    "done_reason":      str(getattr(chunk, "done_reason", "") or ""),
+                    "load_ms":           load_ns        / 1_000_000,
+                    "prompt_eval_ms":    prompt_eval_ns / 1_000_000,
+                    "generation_ms":     eval_ns        / 1_000_000,
+                    "done_reason":       str(getattr(chunk, "done_reason", "") or ""),
+                    "ttft_ms":           _ttft_ms,
                 }
 
     def get_stream_result(self) -> GenerationResult:
@@ -258,6 +267,7 @@ class OllamaClient(BaseLLMClient):
             prompt_eval_ms=m.get("prompt_eval_ms", 0.0),
             generation_ms=m.get("generation_ms", 0.0),
             done_reason=m.get("done_reason", ""),
+            ttft_ms=m.get("ttft_ms", 0.0),
         )
 
     # ── Internal helpers ───────────────────────────────────────────────────────

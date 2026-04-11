@@ -26,6 +26,7 @@ Phase 5+ will add:
 from __future__ import annotations
 
 import os
+import time
 
 import streamlit as st
 import yaml
@@ -137,6 +138,10 @@ def _init_session_state(config: dict) -> None:
         # read by render_telemetry_panel() in the right column.
         # Empty dict renders the "Waiting for first generation…" placeholder.
         "last_telemetry": {},
+
+        # Session start timestamp — used by Session Stats section in the panel.
+        # Set once on first page load; never overwritten.
+        "session_start_ts": time.time(),
     }
 
     for key, value in defaults.items():
