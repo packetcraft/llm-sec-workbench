@@ -6,7 +6,7 @@
 
 ## Features
 
-- **Configurable Security Pipeline** — 7 gates across input and output stages, each independently switchable between `OFF`, `AUDIT`, and `ENFORCE` modes.
+- **Configurable Security Pipeline** — 12 gates across input and output stages, each independently switchable between `OFF`, `AUDIT`, and `ENFORCE` modes.
 - **Stateful `PipelinePayload`** — Upstream mutations (e.g., PII masking) are preserved without breaking downstream classifiers.
 - **Cost/Latency Funnel** — Cheapest and fastest checks run first; heavy LLM-backed gates run last.
 - **Static Fuzzing** — Batch-run predefined or imported malicious payloads; export OWASP-mapped Markdown reports.
@@ -22,16 +22,37 @@
 
 ## Security Gate Summary
 
-| Stage | Gate | Tool | Defense Target |
-|:------|:-----|:-----|:---------------|
-| Gate 1 | `Fast-Scan` | `llm-guard` (CPU/ONNX) | PII, secrets, regex |
-| Gate 2 | `Classify` | `Prompt-Guard-86M` (CPU) | Injection/jailbreak classification |
-| Gate 3 | `Mod-LLM` | `Llama-Guard-3` (Ollama) | Detailed safety taxonomies |
-| Gate 4 | `AIRS-Inlet` | Prisma AIRS (Cloud API) | Enterprise injection & malicious URL |
-| **Target** | **Inference** | **Target LLM** (Ollama) | Main generation task |
-| Gate 5 | `Structure` | `little-canary` (Python) | Behavioral/JSON integrity |
-| Gate 6 | `Final-Check` | `llm-guard` (CPU/ONNX) | Refusal check & PII unmasking |
-| Gate 7 | `AIRS-Dual` | Prisma AIRS (Cloud API) | Output validation, DLP |
+### Input Gates
+
+| Key | Gate | Tool | Defense Target | Default Mode |
+|:----|:-----|:-----|:---------------|:-------------|
+| `custom_regex` | CustomRegexGate | Python regex (zero-ML) | Hot-patch block phrases / WAF simulation | AUDIT |
+| `token_limit` | TokenLimitGate | tiktoken (zero-ML) | Prompt length — context exhaustion & injection hiding | ENFORCE |
+| `invisible_text` | InvisibleTextGate | Unicode Cf/Cc scan (zero-ML) | Hidden Unicode steganography | ENFORCE |
+| `fast_scan` | FastScanGate | llm-guard / Presidio (CPU) | PII masking + secrets/credential detection | AUDIT |
+| `classify` | PromptGuardGate | DeBERTa-v3 ONNX (CPU) | Injection & jailbreak classification | AUDIT |
+| `toxicity_in` | ToxicityInputGate | llm-guard HF classifiers (CPU) | Hostile tone / extreme negative sentiment | AUDIT |
+| `ban_topics` | BanTopicsGate | llm-guard DeBERTa zero-shot (CPU) | Operator-defined forbidden subject areas | AUDIT |
+| `mod_llm` | LlamaGuardGate | Llama Guard 3 via Ollama (LLM-as-a-judge) | Broad safety taxonomy — S1–S14 harm categories | AUDIT |
+
+### Inference
+
+| | | |
+|:-|:-|:-|
+| **Target LLM** | Ollama (local) | Main generation task |
+
+### Output Gates
+
+| Key | Gate | Tool | Defense Target | Default Mode |
+|:----|:-----|:-----|:---------------|:-------------|
+| `sensitive_out` | SensitiveGate | Presidio (CPU) | PII the LLM generated itself | AUDIT |
+| `malicious_urls` | MaliciousURLsGate | Heuristic + llm-guard ML (CPU) | Phishing links & malware URLs in responses | ENFORCE |
+| `no_refusal` | NoRefusalGate | llm-guard classifier (CPU) | Model refusal detection (red-team signal) | AUDIT |
+| `bias_out` | BiasOutputGate | llm-guard classifiers (CPU) | Biased / toxic model output monitoring | AUDIT |
+| `relevance` | RelevanceGate | BAAI embeddings (CPU) | Off-topic responses & jailbreak drift | AUDIT |
+| `deanonymize` | DeanonymizeGate | llm-guard Vault (CPU) | Restore user PII placeholders in response | ENFORCE |
+
+> **Phase 4 (partial):** Llama-Guard-3 (`mod_llm`) is implemented. Prisma AIRS (Cloud API) for enterprise DLP is upcoming.
 
 ---
 
@@ -53,7 +74,7 @@
 
 ## Quick Start
 
-See **[docs/QUICKSTART.md](docs/QUICKSTART.md)** for the full setup guide. Once running, try the **[docs/PLAYGROUND.md](docs/PLAYGROUND.md)** for a guided walkthrough — including how to execute a live prompt injection attack against an undefended model.
+See **[docs/QUICKSTART.md](docs/QUICKSTART.md)** for the full setup guide. Once running, try the **[docs/chatbot/PLAYGROUND.md](docs/chatbot/PLAYGROUND.md)** for a guided walkthrough — including how to execute a live prompt injection attack against an undefended model.
 
 ### Prerequisites
 
@@ -128,13 +149,25 @@ llm-sec-workbench/
 
 ## Architecture
 
-See **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for a detailed explanation of the `PipelinePayload` object, the gate sequence, and design decisions.
+See **[docs/chatbot/ARCHITECTURE.md](docs/chatbot/ARCHITECTURE.md)** for a detailed explanation of the `PipelinePayload` object, the gate sequence, and design decisions.
+
+### Chatbot Security
 
 | Doc | Purpose |
 |:----|:--------|
-| [QUICKSTART.md](docs/QUICKSTART.md) | Installation, environment setup, Docker |
-| [PLAYGROUND.md](docs/PLAYGROUND.md) | Hands-on tutorial — basic chat through live prompt injection |
-| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Pipeline internals, gate interface, design decisions |
+| [QUICKSTART.md](docs/QUICKSTART.md) | Installation, environment setup, Docker, agentic hook setup |
+| [chatbot/PLAYGROUND.md](docs/chatbot/PLAYGROUND.md) | Hands-on tutorial — basic chat through live prompt injection |
+| [chatbot/ARCHITECTURE.md](docs/chatbot/ARCHITECTURE.md) | Pipeline internals, gate interface, design decisions |
+| [chatbot/ADVERSARIAL.md](docs/chatbot/ADVERSARIAL.md) | Gate bypass analysis, OWASP/MITRE mapping, attack chains, hardening playbook |
+
+### Agentic Security
+
+| Doc | Purpose |
+|:----|:--------|
+| [agentic/PLAN.md](docs/agentic/PLAN.md) | Design decisions, architecture overview, implementation phases |
+| [agentic/ARCHITECTURE.md](docs/agentic/ARCHITECTURE.md) | Hook internals, JSONL schema, UI data flow, coverage matrix |
+| [agentic/PLAYGROUND.md](docs/agentic/PLAYGROUND.md) | Hands-on exercises — setup, trigger blocks, review audit log |
+| [agentic/ADVERSARIAL.md](docs/agentic/ADVERSARIAL.md) | Hook bypass techniques, guard model evasion, MITRE ATLAS mapping |
 
 ---
 

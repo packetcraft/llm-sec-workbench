@@ -14,37 +14,37 @@ models:
 
 gates:
   # Default mode for each gate on startup: OFF | AUDIT | ENFORCE
-  fast_scan:    AUDIT
-  classify:     AUDIT
-  mod_llm:      AUDIT
-  airs_inlet:   OFF
-  structure:    AUDIT
-  final_check:  AUDIT
-  airs_dual:    OFF
+  fast_scan: AUDIT
+  classify: AUDIT
+  mod_llm: AUDIT
+  airs_inlet: OFF
+  structure: AUDIT
+  final_check: AUDIT
+  airs_dual: OFF
 
 thresholds:
   # Minimum score (0.0–1.0) before a gate flags a violation
   prompt_guard_injection: 0.80
-  llm_guard_pii:          0.70
-  llm_guard_secrets:      0.90
-  semantic_guard:         0.75
+  llm_guard_pii: 0.70
+  llm_guard_secrets: 0.90
+  semantic_guard: 0.75
 
 palo_alto_airs:
   # API key is loaded from PANW_API_KEY environment variable — do not set here.
   profile_name: "workbench-default"
-  app_id:       "llm-sec-workbench-local"
-  region:       "us-east-1"
+  app_id: "llm-sec-workbench-local"
+  region: "us-east-1"
   # Maximum seconds to wait for an AIRS API response before failing open.
   timeout_seconds: 3
 
 generation:
   # Default LLM generation parameters (overridable from the UI sidebar)
-  temperature:    0.7
-  top_p:          0.9
-  top_k:          40
+  temperature: 0.7
+  top_p: 0.9
+  top_k: 40
   repeat_penalty: 1.1
   # Maximum tokens to generate per response
-  max_tokens:     2048
+  max_tokens: 2048
 
 personas:
   # Built-in system prompt presets available in the sidebar dropdown.
@@ -61,6 +61,36 @@ personas:
   socratic_tutor: >
     You are a Socratic tutor. Never give direct answers. Instead, ask probing
     questions that guide the student toward the answer on their own.
+
+agentic:
+  # Path to the audit directory, relative to the project root.
+  # The hook script writes here; the Streamlit UI reads from here.
+  audit_path: "./audit"
+
+  # Ollama model used by the hook script for tool-call classification.
+  # Must be pulled before hooks will work: ollama pull qwen2.5:1.5b
+  # Fallback if VRAM is constrained: tinyllama
+  guard_model: "qwen2.5:1.5b"
+
+  # Hard timeout in milliseconds before the hook fails open.
+  # Documented value: 5000 ms. Update docs/agentic/PLAN.md if changing.
+  guard_timeout_ms: 5000
+
+  # When true, read-only commands (git status, ls, cat, etc.) bypass the
+  # Ollama call and are logged as ALLOWLISTED. Set to false to force every
+  # command through the guard model (higher latency, no security benefit for reads).
+  allowlist_enabled: true
+
+  # Additional allowlist patterns (Python regex strings) appended to the
+  # built-in read-only list. Shell-composition disqualifier still applies.
+  allowlist_patterns: []
+
+  # When true, the hook classifies and logs every tool call but never blocks
+  # (always exits 0). BLOCK verdicts are still recorded in the audit log as
+  # "would have blocked" — visible in the Agentic Security UI.
+  # Set to false to enable enforcement mode (exit 2 on BLOCK verdicts).
+  # Recommended: keep true during active development, false in review sessions.
+  audit_only: true
 
 redteam:
   # Maximum PAIR iterations before declaring no-breach

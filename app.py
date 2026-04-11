@@ -113,6 +113,9 @@ def _init_session_state(config: dict) -> None:
         # Hot-Patching (Section 9.5) — wired to RegexGate in Phase 2
         "custom_block_phrases": "",
 
+        # BanTopics (Gate 1e) — comma-separated forbidden subject areas
+        "ban_topics_list": "",
+
         # Gate thresholds — adjustable via sidebar sliders
         "pii_threshold": 0.7,
         "token_limit":   512,
@@ -144,6 +147,8 @@ def _init_session_state(config: dict) -> None:
         "fast_scan":      "AUDIT",    # Phase 3 — PII / Secrets scanner
         "classify":       "AUDIT",    # Phase 3 — Prompt-Guard injection classifier
         "toxicity_in":    "AUDIT",    # Phase 3 — Hostile/toxic input tone (quality)
+        "ban_topics":     "AUDIT",    # Phase 3 — Forbidden subject-area filter (zero-shot)
+        "mod_llm":        "AUDIT",    # Phase 4 — Llama Guard 3 LLM safety judge (Ollama)
         "sensitive_out":  "AUDIT",    # Phase 3 — Output-side PII scan (LLM-generated PII)
         "malicious_urls": "ENFORCE",  # Phase 3 — Malicious URL detection (output gate)
         "no_refusal":     "AUDIT",    # Phase 3 — Model refusal detection (output gate)
@@ -184,6 +189,22 @@ def main() -> None:
 
     from ui.chat_view import render, render_connection_error, render_first_run
 
+    # ── Top-level navigation ──────────────────────────────────────────────────
+    with st.sidebar:
+        st.markdown("## Navigation")
+        page = st.radio(
+            label="page",
+            options=["💬 Chat Workbench", "🛡️ Agentic Security"],
+            label_visibility="collapsed",
+        )
+        st.divider()
+
+    # ── Agentic Security — no pipeline or Ollama required ────────────────────
+    if page == "🛡️ Agentic Security":
+        from ui.agentic_view import render as render_agentic
+        render_agentic(config)
+        return
+
     # ── Route: Ollama unreachable ─────────────────────────────────────────────
     if not client.is_available():
         render_connection_error(ollama_host)
@@ -211,7 +232,9 @@ def main() -> None:
         FastScanGate, PromptGuardGate, DeanonymizeGate,
         SensitiveGate, MaliciousURLsGate, NoRefusalGate,
         ToxicityInputGate, BiasOutputGate, RelevanceGate,
+        BanTopicsGate,
     )
+    from gates.ollama_gates import LlamaGuardGate
 
     thresholds = config.get("thresholds", {})
 
@@ -256,6 +279,17 @@ def main() -> None:
         "sentiment_threshold": thresholds.get("sentiment_in", -0.5),
     })
 
+    _raw_topics = st.session_state.get("ban_topics_list", "")
+    ban_topics_gate = BanTopicsGate(config={
+        "topics":    [t.strip() for t in _raw_topics.split(",") if t.strip()],
+        "threshold": thresholds.get("ban_topics", 0.5),
+    })
+
+    llama_guard_gate = LlamaGuardGate(config={
+        "host":  ollama_host,
+        "model": config.get("models", {}).get("safety", "llama-guard3"),
+    })
+
     bias_out_gate = BiasOutputGate(config={
         "threshold": thresholds.get("bias_out", 0.5),
     })
@@ -273,6 +307,8 @@ def main() -> None:
             ("fast_scan",      fast_scan_gate),
             ("classify",       classify_gate),
             ("toxicity_in",    toxicity_in_gate),    # quality: hostile input tone
+            ("ban_topics",     ban_topics_gate),     # operator topic restrictions
+            ("mod_llm",        llama_guard_gate),    # LLM safety judge (Llama Guard 3)
         ],
         output_gates=[
             ("sensitive_out",  sensitive_gate),      # redact LLM-generated PII

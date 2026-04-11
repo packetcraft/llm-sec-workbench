@@ -84,6 +84,9 @@ redteam_reports/
 *.log
 logs/
 
+# ── Agentic Audit Logs ────────────────────────────────────────────────────────
+audit/*.jsonl
+
 # ── OS / Editor ───────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
