@@ -26,7 +26,7 @@ import streamlit as st
 from ui.metrics_panel import (
     render_api_inspector,
     render_context_bar,
-    render_hw_telemetry,
+    render_telemetry_panel,
 )
 
 if TYPE_CHECKING:
@@ -681,12 +681,6 @@ def _render_sidebar(pipeline: "PipelineManager", config: dict) -> None:
 
         st.markdown("---")
 
-        # ── Hardware Telemetry (Phase 5) ───────────────────────────────────────
-        ollama_host_for_hw: str = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-        render_hw_telemetry(ollama_host_for_hw)
-
-        st.markdown("---")
-
         # ── Session controls ───────────────────────────────────────────────────
         st.markdown("#### Session")
         if st.button("Clear Chat History", use_container_width=True):
@@ -697,6 +691,28 @@ def _render_sidebar(pipeline: "PipelineManager", config: dict) -> None:
 # ── Main chat area ─────────────────────────────────────────────────────────────
 
 def _render_chat_area(pipeline: "PipelineManager", config: dict) -> None:
+    """Outer layout wrapper — splits into chat column + telemetry column.
+
+    In Demo Mode the chat fills the full width with no telemetry panel.
+    In Workbench Mode a 3:1 column split places the telemetry panel to the
+    right and reads from ``st.session_state.last_telemetry`` (populated after
+    each generation) so the panel never adds latency to idle re-runs.
+    """
+    if st.session_state.demo_mode:
+        _render_chat_content(pipeline, config)
+        return
+
+    _ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+    _model       = st.session_state.get("target_model", "llama3")
+
+    chat_col, tel_col = st.columns([3, 1], gap="medium")
+    with chat_col:
+        _render_chat_content(pipeline, config)
+    with tel_col:
+        render_telemetry_panel(_ollama_host, _model)
+
+
+def _render_chat_content(pipeline: "PipelineManager", config: dict) -> None:
     # ── Header ─────────────────────────────────────────────────────────────────
     if st.session_state.demo_mode:
         st.markdown(
@@ -1063,7 +1079,22 @@ def _render_chat_area(pipeline: "PipelineManager", config: dict) -> None:
                     if payload.raw_traces:
                         render_api_inspector(payload.raw_traces, payload.metrics)
 
-        # 6. Persist to session state — use payload.output_text so any output-gate
+        # 6. Persist telemetry for the right-side Live Telemetry Panel.
+        #    Written unconditionally so the panel always reflects the last turn.
+        if not st.session_state.demo_mode:
+            st.session_state.last_telemetry = {
+                "gate_metrics":      list(payload.metrics),
+                "gate_modes":        dict(st.session_state.gate_modes),
+                "prompt_tokens":     payload.prompt_tokens,
+                "completion_tokens": payload.completion_tokens,
+                "tokens_per_second": payload.tokens_per_second,
+                "load_ms":           payload.load_ms,
+                "prompt_eval_ms":    payload.prompt_eval_ms,
+                "generation_ms":     payload.generation_ms,
+                "done_reason":       payload.done_reason,
+            }
+
+        # 7. Persist to session state — use payload.output_text so any output-gate
         #    modifications (e.g. Deanonymize) are stored in history, not the raw stream.
         st.session_state.messages.append({
             "role": "assistant",

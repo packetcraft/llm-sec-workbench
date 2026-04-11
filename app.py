@@ -133,9 +133,10 @@ def _init_session_state(config: dict) -> None:
         # Format: {"gate_name": "OFF" | "AUDIT" | "ENFORCE"}
         "gate_modes": {},
 
-        # Last generation token throughput — updated after each stream; read
-        # by the hardware telemetry panel (Phase 5) in the sidebar.
-        "last_tps": 0.0,
+        # Live Telemetry Panel (Phase 5B) — populated after each generation;
+        # read by render_telemetry_panel() in the right column.
+        # Empty dict renders the "Waiting for first generation…" placeholder.
+        "last_telemetry": {},
     }
 
     for key, value in defaults.items():
