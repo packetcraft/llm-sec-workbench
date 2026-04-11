@@ -37,6 +37,17 @@ Monitors and audits Claude Code (AI agent) tool calls using Claude Code hook eve
 
 ---
 
+### 3. UI & Telemetry
+UI enhancements and instrumentation panels for the Chat Workbench.
+
+| Document | Purpose |
+|:---------|:--------|
+| [ui/TELEMETRY_PLAN.md](docs/ui/TELEMETRY_PLAN.md) | Live Telemetry Panel redesign — right-side column with gate latency, pipeline summary, token chart, Ollama timing breakdown, model info pills, memory countdown |
+
+> Current status: Parked. Phase 5 baseline implemented (inline badges, context bar, sidebar hw panel). Full panel redesign not yet started.
+
+---
+
 ## Shared Resources
 
 | File | Purpose |
