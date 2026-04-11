@@ -132,6 +132,10 @@ def _init_session_state(config: dict) -> None:
         # Gate modes — populated per-phase as gates are implemented.
         # Format: {"gate_name": "OFF" | "AUDIT" | "ENFORCE"}
         "gate_modes": {},
+
+        # Last generation token throughput — updated after each stream; read
+        # by the hardware telemetry panel (Phase 5) in the sidebar.
+        "last_tps": 0.0,
     }
 
     for key, value in defaults.items():

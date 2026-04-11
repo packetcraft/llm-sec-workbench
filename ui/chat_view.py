@@ -19,9 +19,15 @@ Phase notes
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 import streamlit as st
+from ui.metrics_panel import (
+    render_api_inspector,
+    render_context_bar,
+    render_hw_telemetry,
+)
 
 if TYPE_CHECKING:
     from core.llm_client import OllamaClient
@@ -675,6 +681,12 @@ def _render_sidebar(pipeline: "PipelineManager", config: dict) -> None:
 
         st.markdown("---")
 
+        # ── Hardware Telemetry (Phase 5) ───────────────────────────────────────
+        ollama_host_for_hw: str = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+        render_hw_telemetry(ollama_host_for_hw)
+
+        st.markdown("---")
+
         # ── Session controls ───────────────────────────────────────────────────
         st.markdown("#### Session")
         if st.button("Clear Chat History", use_container_width=True):
@@ -772,7 +784,7 @@ def _render_chat_area(pipeline: "PipelineManager", config: dict) -> None:
                 # Gate metric badges
                 if msg.get("gate_metrics"):
                     _render_gate_metrics(msg["gate_metrics"])
-                # Token telemetry
+                # Token telemetry + context bar
                 t = msg.get("telemetry") or {}
                 if t and not msg.get("blocked"):
                     st.caption(
@@ -780,6 +792,16 @@ def _render_chat_area(pipeline: "PipelineManager", config: dict) -> None:
                         f"{t.get('completion_tokens', 0)} completion · "
                         f"{t.get('tokens_per_second', 0.0):.1f} t/s"
                     )
+                    _ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+                    _model = st.session_state.get("target_model", "llama3")
+                    render_context_bar(
+                        t.get("prompt_tokens", 0),
+                        _model,
+                        _ollama_host,
+                    )
+                # API Inspector
+                if msg.get("raw_traces"):
+                    render_api_inspector(msg["raw_traces"], msg.get("gate_metrics") or [])
 
     # ── Chat input ─────────────────────────────────────────────────────────────
     placeholder = (
@@ -1024,6 +1046,15 @@ def _render_chat_area(pipeline: "PipelineManager", config: dict) -> None:
                             f"{payload.completion_tokens} completion · "
                             f"{payload.tokens_per_second:.1f} t/s"
                         )
+                        # Persist TPS so the sidebar hw panel can display it
+                        st.session_state.last_tps = payload.tokens_per_second
+                        # Context window utilisation bar
+                        _ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+                        _model = st.session_state.get("target_model", "llama3")
+                        render_context_bar(payload.prompt_tokens, _model, _ollama_host)
+                    # API Inspector — raw gate traces
+                    if payload.raw_traces:
+                        render_api_inspector(payload.raw_traces, payload.metrics)
 
         # 6. Persist to session state — use payload.output_text so any output-gate
         #    modifications (e.g. Deanonymize) are stored in history, not the raw stream.
@@ -1032,6 +1063,7 @@ def _render_chat_area(pipeline: "PipelineManager", config: dict) -> None:
             "content": payload.output_text if payload.output_text else full_response,
             "blocked": payload.is_blocked,
             "gate_metrics": payload.metrics,
+            "raw_traces": dict(payload.raw_traces),
             "telemetry": {
                 "prompt_tokens": payload.prompt_tokens,
                 "completion_tokens": payload.completion_tokens,
