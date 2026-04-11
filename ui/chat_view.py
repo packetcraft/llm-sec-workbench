@@ -212,9 +212,73 @@ def render(pipeline: "PipelineManager", config: dict) -> None:
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 
+def _sb_section(title: str) -> None:
+    """Sidebar section header — matches the right-panel telemetry style."""
+    st.markdown(
+        f"<div style='font-size:0.65rem;color:#555566;font-weight:700;"
+        f"letter-spacing:0.09em;margin:10px 0 4px 0;padding-top:4px;"
+        f"border-top:1px solid #2a2a3a'>{title}</div>",
+        unsafe_allow_html=True,
+    )
+
+
+_MODE_OPTIONS = ["OFF", "AUDIT", "ENFORCE"]
+_MODE_COLORS  = {"OFF": "#555566", "AUDIT": "#E0AF68", "ENFORCE": "#F7768E"}
+
+
+def _gate_row(gate_key: str, label: str, default: str, help_text: str) -> str:
+    """Render a compact gate-mode row (label + selectbox) and return the chosen mode."""
+    current = st.session_state.gate_modes.get(gate_key, default)
+    col_lbl, col_sel = st.columns([3, 2])
+    with col_lbl:
+        color = _MODE_COLORS[current]
+        st.markdown(
+            f"<div style='font-size:0.72rem;color:#cdd6f4;padding-top:6px'>"
+            f"<span style='color:{color}'>●</span> {label}</div>",
+            unsafe_allow_html=True,
+        )
+    with col_sel:
+        new_mode = st.selectbox(
+            label,
+            _MODE_OPTIONS,
+            index=_MODE_OPTIONS.index(current),
+            label_visibility="collapsed",
+            help=help_text,
+            key=f"gate_sel_{gate_key}",
+        )
+    if new_mode != current:
+        st.session_state.gate_modes[gate_key] = new_mode
+        st.rerun()
+    return new_mode
+
+
 def _render_sidebar(pipeline: "PipelineManager", config: dict) -> None:
     with st.sidebar:
-        # ── Demo Mode toggle (always visible) ─────────────────────────────────
+
+        # ── MODEL ─────────────────────────────────────────────────────────────
+        _sb_section("MODEL")
+        available_models = pipeline.client.list_models()
+        if not available_models:
+            st.warning("No models found in Ollama.")
+        else:
+            current = st.session_state.get("target_model", "")
+            try:
+                current_idx = available_models.index(current)
+            except ValueError:
+                base = current.split(":")[0].lower()
+                current_idx = next(
+                    (i for i, m in enumerate(available_models)
+                     if m.split(":")[0].lower() == base), 0,
+                )
+            selected_model = st.selectbox(
+                "Target Model", available_models, index=current_idx,
+                label_visibility="collapsed",
+            )
+            if selected_model != st.session_state.get("target_model"):
+                st.session_state.target_model = selected_model
+                st.session_state.messages = []
+                st.rerun()
+
         demo_mode = st.toggle(
             "Demo Mode",
             value=st.session_state.demo_mode,
@@ -227,462 +291,174 @@ def _render_sidebar(pipeline: "PipelineManager", config: dict) -> None:
             st.session_state.demo_mode = demo_mode
             st.rerun()
 
-        st.markdown("---")
+        if st.session_state.demo_mode:
+            return
 
-        # ── Target model dropdown ──────────────────────────────────────────────
-        st.caption("TARGET MODEL")
-        available_models = pipeline.client.list_models()
-
-        if not available_models:
-            st.warning("No models found in Ollama.")
-        else:
-            # Resolve the best index for the currently stored model name.
-            # Handles both exact matches ("llama3:latest") and base-name matches
-            # where config.yaml says "llama3" but Ollama returns "llama3:latest".
-            current = st.session_state.get("target_model", "")
-            try:
-                current_idx = available_models.index(current)
-            except ValueError:
-                base = current.split(":")[0].lower()
-                current_idx = next(
-                    (i for i, m in enumerate(available_models)
-                     if m.split(":")[0].lower() == base),
-                    0,
-                )
-
-            selected_model = st.selectbox(
-                "Target Model",
-                available_models,
-                index=current_idx,
+        # ── CONTEXT ───────────────────────────────────────────────────────────
+        _sb_section("CONTEXT")
+        with st.expander("Persona / System Prompt", expanded=False):
+            persona_names = list(PERSONA_PROMPTS.keys())
+            current_index = persona_names.index(st.session_state.get("persona", "Default"))
+            selected_persona = st.selectbox(
+                "Persona", persona_names, index=current_index,
+                label_visibility="collapsed",
+            )
+            if selected_persona != st.session_state.persona:
+                st.session_state.persona = selected_persona
+                st.session_state.system_prompt = PERSONA_PROMPTS[selected_persona]
+                st.rerun()
+            st.session_state.system_prompt = st.text_area(
+                "System Prompt",
+                value=st.session_state.system_prompt,
+                height=120,
+                placeholder="Optional — leave blank for no system prompt.",
                 label_visibility="collapsed",
             )
 
-            if selected_model != st.session_state.get("target_model"):
-                st.session_state.target_model = selected_model
-                # Clear history so the new model starts fresh
-                st.session_state.messages = []
-                st.rerun()
+        # ── INPUT GATES ───────────────────────────────────────────────────────
+        _sb_section("INPUT GATES")
 
-        if st.session_state.demo_mode:
-            # Demo Mode: show nothing further in the sidebar
-            return
-
-        # ── Persona & System Prompt ────────────────────────────────────────────
-        st.markdown("#### Persona")
-
-        persona_names = list(PERSONA_PROMPTS.keys())
-        current_index = persona_names.index(st.session_state.get("persona", "Default"))
-
-        selected_persona = st.selectbox(
-            "Preset",
-            persona_names,
-            index=current_index,
-            label_visibility="collapsed",
+        # custom_regex (hot-patch)
+        regex_mode = _gate_row(
+            "custom_regex", "Regex Hot-Patch", "AUDIT",
+            "Comma-separated block phrases. Checked against raw user input.\n"
+            "ENFORCE: blocks immediately on any match.",
         )
-
-        # When persona changes, overwrite the system prompt with the preset
-        if selected_persona != st.session_state.persona:
-            st.session_state.persona = selected_persona
-            st.session_state.system_prompt = PERSONA_PROMPTS[selected_persona]
-            st.rerun()
-
-        st.session_state.system_prompt = st.text_area(
-            "System Prompt",
-            value=st.session_state.system_prompt,
-            height=150,
-            placeholder="Optional — leave blank for no system prompt.",
-        )
-
-        st.markdown("---")
-
-        # ── Generation parameters ──────────────────────────────────────────────
-        st.markdown("#### Generation Parameters")
-
-        st.session_state.temperature = st.slider(
-            "Temperature",
-            min_value=0.0,
-            max_value=2.0,
-            value=float(st.session_state.temperature),
-            step=0.05,
-            help="Higher = more creative / random. Lower = more deterministic.",
-        )
-        st.session_state.top_p = st.slider(
-            "Top P",
-            min_value=0.0,
-            max_value=1.0,
-            value=float(st.session_state.top_p),
-            step=0.05,
-            help="Nucleus sampling — cumulative probability cutoff.",
-        )
-        st.session_state.top_k = st.slider(
-            "Top K",
-            min_value=1,
-            max_value=100,
-            value=int(st.session_state.top_k),
-            step=1,
-            help="Limits token selection to the top-K most probable tokens.",
-        )
-        st.session_state.repeat_penalty = st.slider(
-            "Repeat Penalty",
-            min_value=0.5,
-            max_value=2.0,
-            value=float(st.session_state.repeat_penalty),
-            step=0.05,
-            help="Penalises repeated tokens. >1.0 reduces repetition.",
-        )
-
-        st.markdown("---")
-
-        # ── Hot-Patching (CustomRegexGate) ────────────────────────────────────
-        st.markdown("#### Hot-Patching")
-
-        current_regex_mode = st.session_state.gate_modes.get("custom_regex", "AUDIT")
-        mode_colors = {"OFF": "#888", "AUDIT": "#E0AF68", "ENFORCE": "#F7768E"}
-
-        new_regex_mode = st.radio(
-            "RegexGate mode",
-            options=["OFF", "AUDIT", "ENFORCE"],
-            index=["OFF", "AUDIT", "ENFORCE"].index(current_regex_mode),
-            horizontal=True,
-            label_visibility="collapsed",
-            help=(
-                "OFF: gate skipped.\n"
-                "AUDIT: flags matches in telemetry but never blocks.\n"
-                "ENFORCE: blocks the prompt immediately on any match."
-            ),
-        )
-        if new_regex_mode != current_regex_mode:
-            st.session_state.gate_modes["custom_regex"] = new_regex_mode
-            st.rerun()
-
-        # Coloured mode badge
-        badge_color = mode_colors[new_regex_mode]
-        st.markdown(
-            f"<span style='color:{badge_color};font-size:0.78rem'>"
-            f"● RegexGate — {new_regex_mode}</span>",
-            unsafe_allow_html=True,
-        )
-
-        if new_regex_mode != "OFF":
+        if regex_mode != "OFF":
             st.session_state.custom_block_phrases = st.text_input(
-                "Block Phrases",
+                "Block phrases",
                 value=st.session_state.custom_block_phrases,
-                placeholder="e.g. ignore all previous, jailbreak, DAN",
-                help="Comma-separated, case-insensitive. Checked against the raw user input.",
+                placeholder="ignore previous, jailbreak, DAN …",
+                label_visibility="collapsed",
             )
 
-        st.markdown("---")
-
-        # ── Fast Classifiers (FastScanGate, PromptGuardGate) ──────────────────
-        # ── Input Guardrails (zero-ML) ─────────────────────────────────────────
-        st.markdown("#### Input Guardrails")
-
-        _GUARDRAIL_GATES = [
-            (
-                "token_limit",
-                "Token Limit",
-                (
-                    "Rejects prompts exceeding the token budget (tiktoken, < 1ms).\n"
-                    "Prevents context-exhaustion attacks and oversized injection payloads.\n"
-                    "ENFORCE: blocks oversized prompts before any ML gate runs.\n"
-                    "AUDIT: flags but continues."
-                ),
-            ),
-            (
-                "invisible_text",
-                "Invisible Text",
-                (
-                    "Detects hidden Unicode characters (zero-width, directional overrides, "
-                    "control chars) used in steganography injection attacks (< 1ms).\n"
-                    "ENFORCE: blocks prompts containing invisible characters.\n"
-                    "AUDIT: flags but continues."
-                ),
-            ),
-        ]
-
-        for gate_key, gate_label, gate_help in _GUARDRAIL_GATES:
-            current_gr_mode = st.session_state.gate_modes.get(gate_key, "ENFORCE")
-            new_gr_mode = st.radio(
-                gate_label,
-                options=["OFF", "AUDIT", "ENFORCE"],
-                index=["OFF", "AUDIT", "ENFORCE"].index(current_gr_mode),
-                horizontal=True,
-                help=gate_help,
-            )
-            if new_gr_mode != current_gr_mode:
-                st.session_state.gate_modes[gate_key] = new_gr_mode
-                st.rerun()
-            badge_color = mode_colors[new_gr_mode]
-            st.markdown(
-                f"<span style='color:{badge_color};font-size:0.78rem'>"
-                f"● {gate_key} — {new_gr_mode}</span>",
-                unsafe_allow_html=True,
-            )
-
-            # Token limit slider — shown only for token_limit gate when not OFF
-            if gate_key == "token_limit" and new_gr_mode != "OFF":
-                st.session_state.token_limit = st.slider(
-                    "Max Tokens",
-                    min_value=64,
-                    max_value=4096,
-                    value=int(st.session_state.get("token_limit", 512)),
-                    step=64,
-                    help=(
-                        "Maximum number of tokens allowed in a single prompt.\n"
-                        "Uses cl100k_base (GPT-4 / llama compatible) tokenisation.\n"
-                        "512 is a reasonable default for interactive chat.\n"
-                        "Raise to 2048–4096 if users need to paste large documents."
-                    ),
-                )
-
-        st.markdown("---")
-
-        st.markdown("#### Fast Classifiers")
-
-        _CLASSIFIER_GATES = [
-            (
-                "fast_scan",
-                "FastScan (PII / Secrets)",
-                (
-                    "llm-guard Anonymize + Secrets scanners (CPU/Presidio).\n"
-                    "OFF: skipped entirely.\n"
-                    "AUDIT: masks PII in current_text, logs verdict, pipeline continues.\n"
-                    "ENFORCE: blocks prompt if PII or secrets detected."
-                ),
-            ),
-            (
-                "classify",
-                "PromptGuard (Injection)",
-                (
-                    "Meta Prompt-Guard-86M injection/jailbreak classifier (CPU).\n"
-                    "OFF: skipped entirely.\n"
-                    "AUDIT: logs threat score, pipeline continues regardless.\n"
-                    "ENFORCE: blocks prompt when threat score \u2265 threshold."
-                ),
-            ),
-            (
-                "toxicity_in",
-                "Toxicity / Sentiment (Input)",
-                (
-                    "Quality gate — detects hostile, abusive, or toxic input tone.\n"
-                    "Runs two sub-scanners: Toxicity (abusive language classifier) and\n"
-                    "Sentiment (flags extreme negativity below -0.5).\n"
-                    "AUDIT (recommended): logs verdict, never blocks on tone alone.\n"
-                    "ENFORCE: blocks prompt if toxicity or hostile sentiment detected.\n"
-                    "OFF: gate is skipped entirely."
-                ),
-            ),
-        ]
-
-        # Render classifier gates
-        for gate_key, gate_label, gate_help in _CLASSIFIER_GATES:
-            current_clf_mode = st.session_state.gate_modes.get(gate_key, "AUDIT")
-            new_clf_mode = st.radio(
-                gate_label,
-                options=["OFF", "AUDIT", "ENFORCE"],
-                index=["OFF", "AUDIT", "ENFORCE"].index(current_clf_mode),
-                horizontal=True,
-                help=gate_help,
-            )
-            if new_clf_mode != current_clf_mode:
-                st.session_state.gate_modes[gate_key] = new_clf_mode
-                st.rerun()
-            badge_color = mode_colors[new_clf_mode]
-            st.markdown(
-                f"<span style='color:{badge_color};font-size:0.78rem'>"
-                f"● {gate_key} — {new_clf_mode}</span>",
-                unsafe_allow_html=True,
-            )
-
-            # PII confidence threshold slider — shown only for fast_scan
-            if gate_key == "fast_scan" and new_clf_mode != "OFF":
-                st.session_state.pii_threshold = st.slider(
-                    "PII Confidence Threshold",
-                    min_value=0.1,
-                    max_value=1.0,
-                    value=float(st.session_state.get("pii_threshold", 0.7)),
-                    step=0.05,
-                    help=(
-                        "Minimum Presidio confidence score for an entity to be treated as PII.\n"
-                        "Lower = more aggressive (more false positives).\n"
-                        "Higher = more conservative (may miss low-confidence PII).\n"
-                        "0.7 is recommended for general use."
-                    ),
-                )
-
-        # ── Ban Topics (Gate 1e) ───────────────────────────────────────────────
-        ban_topics_mode = st.session_state.gate_modes.get("ban_topics", "AUDIT")
-        new_ban_mode = st.radio(
-            "Ban Topics (Subject Filter)",
-            options=["OFF", "AUDIT", "ENFORCE"],
-            index=["OFF", "AUDIT", "ENFORCE"].index(ban_topics_mode),
-            horizontal=True,
-            help=(
-                "Zero-shot topic classifier — blocks prompts covering forbidden subjects.\n"
-                "Uses semantic understanding, not keyword matching.\n"
-                "AUDIT: flags matching topics in telemetry, pipeline continues.\n"
-                "ENFORCE: blocks the prompt if any configured topic is detected.\n"
-                "OFF: gate is skipped entirely (no-op if Topics list is empty)."
-            ),
+        # token_limit
+        tok_mode = _gate_row(
+            "token_limit", "Token Limit", "ENFORCE",
+            "Rejects prompts exceeding the token budget (tiktoken, < 1ms).\n"
+            "ENFORCE: blocks before any ML gate runs.",
         )
-        if new_ban_mode != ban_topics_mode:
-            st.session_state.gate_modes["ban_topics"] = new_ban_mode
-            st.rerun()
-        badge_color = mode_colors[new_ban_mode]
-        st.markdown(
-            f"<span style='color:{badge_color};font-size:0.78rem'>"
-            f"● ban_topics — {new_ban_mode}</span>",
-            unsafe_allow_html=True,
+        if tok_mode != "OFF":
+            st.session_state.token_limit = st.slider(
+                "Max tokens", 64, 4096,
+                int(st.session_state.get("token_limit", 512)), 64,
+                label_visibility="collapsed",
+            )
+
+        # invisible_text
+        _gate_row(
+            "invisible_text", "Invisible Text", "ENFORCE",
+            "Detects zero-width / steganography Unicode chars (< 1ms).",
         )
 
-        if new_ban_mode != "OFF":
+        # fast_scan
+        scan_mode = _gate_row(
+            "fast_scan", "PII / Secrets", "AUDIT",
+            "Presidio Anonymize + Secrets scanners (CPU).\n"
+            "AUDIT: masks PII in prompt, logs, continues.\n"
+            "ENFORCE: blocks if PII or secrets detected.",
+        )
+        if scan_mode != "OFF":
+            st.session_state.pii_threshold = st.slider(
+                "PII threshold", 0.1, 1.0,
+                float(st.session_state.get("pii_threshold", 0.7)), 0.05,
+                help="Presidio entity confidence cutoff (0.7 recommended).",
+                label_visibility="collapsed",
+            )
+
+        # classify / toxicity_in
+        _gate_row(
+            "classify", "Injection Detect", "AUDIT",
+            "DeBERTa injection/jailbreak classifier (CPU).\n"
+            "ENFORCE: blocks when threat score ≥ threshold.",
+        )
+        _gate_row(
+            "toxicity_in", "Toxicity (Input)", "AUDIT",
+            "Hostile/abusive input tone (Toxicity + Sentiment).\n"
+            "AUDIT recommended — never block on tone alone.",
+        )
+
+        # ban_topics
+        ban_mode = _gate_row(
+            "ban_topics", "Ban Topics", "AUDIT",
+            "Zero-shot topic filter — semantic, not keyword.\n"
+            "ENFORCE: blocks if any configured topic is detected.",
+        )
+        if ban_mode != "OFF":
             st.session_state.ban_topics_list = st.text_input(
-                "Banned Topics",
+                "Banned topics",
                 value=st.session_state.get("ban_topics_list", ""),
-                placeholder="e.g. weapons, self-harm, politics",
-                help=(
-                    "Comma-separated subject areas the model must not discuss.\n"
-                    "Uses zero-shot classification — paraphrases are caught too.\n"
-                    "Gate is a no-op when this list is empty.\n"
-                    "Examples: weapons, gambling, competitor products, adult content."
-                ),
+                placeholder="weapons, self-harm, politics …",
+                label_visibility="collapsed",
             )
 
-        st.markdown("---")
-
-        # ── LLM Judges ────────────────────────────────────────────────────────
-        st.markdown("#### LLM Judges")
-
-        current_mod_mode = st.session_state.gate_modes.get("mod_llm", "AUDIT")
-        new_mod_mode = st.radio(
-            "Llama Guard 3",
-            options=["OFF", "AUDIT", "ENFORCE"],
-            index=["OFF", "AUDIT", "ENFORCE"].index(current_mod_mode),
-            horizontal=True,
-            help=(
-                "Meta Llama Guard 3 — LLM-as-judge safety classifier (Ollama).\n"
-                "Classifies the raw user prompt against 14 harm categories "
-                "(S1–S14: violent crimes, CBRN weapons, CSAM, hate, self-harm, etc.).\n"
-                "Requires llama-guard3 to be pulled in Ollama.\n"
-                "AUDIT: logs verdict and categories, pipeline continues.\n"
-                "ENFORCE: blocks the prompt if any safety category is violated.\n"
-                "OFF: gate skipped entirely (no Ollama call)."
-            ),
-        )
-        if new_mod_mode != current_mod_mode:
-            st.session_state.gate_modes["mod_llm"] = new_mod_mode
-            st.rerun()
-        badge_color = mode_colors[new_mod_mode]
-        st.markdown(
-            f"<span style='color:{badge_color};font-size:0.78rem'>"
-            f"● mod_llm — {new_mod_mode}</span>",
-            unsafe_allow_html=True,
+        # mod_llm (LLM judge)
+        _gate_row(
+            "mod_llm", "Llama Guard 3", "AUDIT",
+            "LLM-as-judge: 14 harm categories (S1–S14).\n"
+            "Requires llama-guard3 in Ollama.\n"
+            "ENFORCE: blocks on any safety violation.",
         )
 
-        st.markdown("---")
+        # ── OUTPUT GATES ──────────────────────────────────────────────────────
+        _sb_section("OUTPUT GATES")
 
-        # ── Output Gates ───────────────────────────────────────────────────────
-        st.markdown("#### Output Gates")
+        _gate_row(
+            "sensitive_out", "PII (Output)", "AUDIT",
+            "Catches PII the LLM hallucinated — invisible to input-side scan.\n"
+            "ENFORCE: redacts with placeholders.",
+        )
+        _gate_row(
+            "malicious_urls", "Malicious URLs", "ENFORCE",
+            "Heuristic + ML URL classifier.\n"
+            "ENFORCE: removes detected URLs from response.",
+        )
+        _gate_row(
+            "no_refusal", "Refusal Detect", "AUDIT",
+            "Flags when the model declines to answer.\n"
+            "Useful for red-team / over-blocking analysis.",
+        )
+        _gate_row(
+            "bias_out", "Bias / Toxicity", "AUDIT",
+            "Bias + Toxicity in model responses (monitoring only).",
+        )
+        _gate_row(
+            "relevance", "Relevance", "AUDIT",
+            "Off-topic / hallucination via embedding similarity.\n"
+            "Low score = response drifted from the question.",
+        )
+        _gate_row(
+            "deanonymize", "PII Restore", "ENFORCE",
+            "Swaps [REDACTED_*] placeholders back to original values.\n"
+            "Requires FastScan to be active.",
+        )
 
-        _OUTPUT_GATES = [
-            (
-                "sensitive_out",
-                "Sensitive (LLM-Generated PII)",
-                (
-                    "Scans the model's response for PII the LLM generated on its own.\n"
-                    "Catches hallucinated names, invented phone numbers, or training-data leakage "
-                    "that the input-side FastScan can never see.\n"
-                    "ENFORCE: redacts found PII with placeholders (e.g. [PERSON], [US_SSN]).\n"
-                    "AUDIT: flags in telemetry and redacts, but does not halt the pipeline.\n"
-                    "OFF: gate is skipped entirely."
-                ),
-            ),
-            (
-                "bias_out",
-                "Bias / Toxicity (Output)",
-                (
-                    "Quality gate — detects biased or toxic content in model responses.\n"
-                    "Runs two sub-scanners: Bias (distilroberta-bias) and output-side Toxicity.\n"
-                    "Does not modify the response text — monitoring only.\n"
-                    "AUDIT (recommended): logs verdict, pipeline continues.\n"
-                    "ENFORCE: halts pipeline if bias or toxicity detected in response.\n"
-                    "OFF: gate is skipped entirely."
-                ),
-            ),
-            (
-                "relevance",
-                "Relevance (Hallucination)",
-                (
-                    "Quality gate — detects off-topic or hallucinated responses.\n"
-                    "Compares user prompt to model response using BAAI/bge-base-en-v1.5\n"
-                    "embeddings. Low cosine similarity = response drifted from the question.\n"
-                    "Does not modify the response text — monitoring only.\n"
-                    "AUDIT (recommended): logs similarity score, pipeline continues.\n"
-                    "ENFORCE: halts if similarity falls below threshold.\n"
-                    "OFF: gate is skipped entirely."
-                ),
-            ),
-            (
-                "malicious_urls",
-                "Malicious URLs",
-                (
-                    "Scans the model's response for malicious or phishing URLs.\n"
-                    "Catches links the model was tricked into echoing via prompt injection, "
-                    "or hallucinated domains that match known threat patterns.\n"
-                    "ENFORCE (recommended): removes detected URLs from the response.\n"
-                    "AUDIT: flags in telemetry but lets the URL through.\n"
-                    "OFF: gate is skipped entirely."
-                ),
-            ),
-            (
-                "no_refusal",
-                "No Refusal (Refusal Detector)",
-                (
-                    "Detects when the model declines to answer.\n"
-                    "Useful for red-team analysis ('did my attack work?') and "
-                    "over-blocking detection ('is the safety system too aggressive?').\n"
-                    "The model's refusal message is always shown — this gate only flags it.\n"
-                    "AUDIT (recommended): logs refusals as a BLOCK badge in telemetry.\n"
-                    "ENFORCE: additionally surfaces an error banner.\n"
-                    "OFF: gate is skipped entirely."
-                ),
-            ),
-            (
-                "deanonymize",
-                "Deanonymize (PII Restore)",
-                (
-                    "Restores original PII values from placeholders in the LLM response.\n"
-                    "Requires FastScan to be ON and to have detected PII.\n"
-                    "ENFORCE (recommended): always restore — users see real names, not [REDACTED_PERSON_1].\n"
-                    "AUDIT: restores but logs; useful for testing the gate in isolation.\n"
-                    "OFF: placeholders remain visible in the response."
-                ),
-            ),
-        ]
-
-        for gate_key, gate_label, gate_help in _OUTPUT_GATES:
-            current_out_mode = st.session_state.gate_modes.get(gate_key, "ENFORCE")
-            new_out_mode = st.radio(
-                gate_label,
-                options=["OFF", "AUDIT", "ENFORCE"],
-                index=["OFF", "AUDIT", "ENFORCE"].index(current_out_mode),
-                horizontal=True,
-                help=gate_help,
+        # ── GENERATION ────────────────────────────────────────────────────────
+        _sb_section("GENERATION")
+        with st.expander("Parameters", expanded=False):
+            st.session_state.temperature = st.slider(
+                "Temperature", 0.0, 2.0,
+                float(st.session_state.temperature), 0.05,
+                help="Higher = more creative. Lower = more deterministic.",
             )
-            if new_out_mode != current_out_mode:
-                st.session_state.gate_modes[gate_key] = new_out_mode
-                st.rerun()
-            badge_color = mode_colors[new_out_mode]
-            st.markdown(
-                f"<span style='color:{badge_color};font-size:0.78rem'>"
-                f"● {gate_key} — {new_out_mode}</span>",
-                unsafe_allow_html=True,
+            st.session_state.top_p = st.slider(
+                "Top P", 0.0, 1.0,
+                float(st.session_state.top_p), 0.05,
+                help="Nucleus sampling cutoff.",
+            )
+            st.session_state.top_k = st.slider(
+                "Top K", 1, 100,
+                int(st.session_state.top_k), 1,
+                help="Limit selection to top-K tokens.",
+            )
+            st.session_state.repeat_penalty = st.slider(
+                "Repeat Penalty", 0.5, 2.0,
+                float(st.session_state.repeat_penalty), 0.05,
+                help=">1.0 reduces repetition.",
             )
 
-        st.markdown("---")
-
-        # ── Session controls ───────────────────────────────────────────────────
-        st.markdown("#### Session")
+        # ── SESSION ───────────────────────────────────────────────────────────
+        _sb_section("SESSION")
         if st.button("Clear Chat History", use_container_width=True):
             st.session_state.messages = []
             st.rerun()
