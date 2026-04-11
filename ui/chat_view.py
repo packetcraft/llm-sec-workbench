@@ -212,6 +212,64 @@ def render(pipeline: "PipelineManager", config: dict) -> None:
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 
+_SIDEBAR_CSS_INJECTED = False   # inject once per app lifetime (module-level flag)
+
+
+def _inject_sidebar_css() -> None:
+    """Inject CSS that scales all native sidebar widgets down to match the
+    0.72 rem custom-HTML labels, giving a compact uniform look."""
+    global _SIDEBAR_CSS_INJECTED
+    if _SIDEBAR_CSS_INJECTED:
+        return
+    _SIDEBAR_CSS_INJECTED = True
+    st.markdown(
+        """
+        <style>
+        /* ── Selectbox: value text + control height ───────────────────── */
+        section[data-testid="stSidebar"] [data-baseweb="select"] span,
+        section[data-testid="stSidebar"] [data-baseweb="select"] div {
+            font-size: 0.72rem !important;
+        }
+        section[data-testid="stSidebar"] [data-baseweb="select"] > div {
+            min-height: 28px !important;
+            padding-top: 2px !important;
+            padding-bottom: 2px !important;
+        }
+        /* ── Text inputs ──────────────────────────────────────────────── */
+        section[data-testid="stSidebar"] .stTextInput input,
+        section[data-testid="stSidebar"] .stTextArea textarea {
+            font-size: 0.72rem !important;
+        }
+        /* ── Slider labels ────────────────────────────────────────────── */
+        section[data-testid="stSidebar"] .stSlider label p,
+        section[data-testid="stSidebar"] .stSlider [data-testid="stTickBarMin"],
+        section[data-testid="stSidebar"] .stSlider [data-testid="stTickBarMax"] {
+            font-size: 0.72rem !important;
+        }
+        /* ── Toggle / checkbox labels ─────────────────────────────────── */
+        section[data-testid="stSidebar"] .stToggle label p,
+        section[data-testid="stSidebar"] .stCheckbox label p {
+            font-size: 0.72rem !important;
+        }
+        /* ── Expander summary text ────────────────────────────────────── */
+        section[data-testid="stSidebar"] details summary p {
+            font-size: 0.72rem !important;
+        }
+        /* ── Buttons ──────────────────────────────────────────────────── */
+        section[data-testid="stSidebar"] .stButton > button {
+            font-size: 0.72rem !important;
+            padding: 4px 12px !important;
+        }
+        /* ── Warning / info banners ───────────────────────────────────── */
+        section[data-testid="stSidebar"] .stAlert p {
+            font-size: 0.72rem !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _sb_section(title: str) -> None:
     """Sidebar section header — matches the right-panel telemetry style."""
     st.markdown(
@@ -254,6 +312,7 @@ def _gate_row(gate_key: str, label: str, default: str, help_text: str) -> str:
 
 def _render_sidebar(pipeline: "PipelineManager", config: dict) -> None:
     with st.sidebar:
+        _inject_sidebar_css()
 
         # ── MODEL ─────────────────────────────────────────────────────────────
         _sb_section("MODEL")
