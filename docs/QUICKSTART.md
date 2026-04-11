@@ -113,10 +113,21 @@ Your prompt will show `(venv)` when the environment is active.
 ### Install dependencies
 
 ```bash
+python.exe -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
 > PyTorch is installed in **CPU-only** mode to prevent CUDA/ONNX conflicts and preserve GPU VRAM for Ollama.
+
+### Download the spaCy NLP model
+
+`presidio-analyzer` (used by the PII/secrets gates) requires a spaCy English model for named-entity recognition:
+
+```bash
+python -m spacy download en_core_web_lg
+```
+
+> `en_core_web_lg` (~750 MB) gives the best PII recall. If you want a faster first install, use `en_core_web_sm` (12 MB) — you can swap to `en_core_web_lg` later without reinstalling other packages.
 
 > **Always activate the venv before working on this project.** Run `deactivate` to exit it.
 
