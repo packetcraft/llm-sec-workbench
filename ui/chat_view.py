@@ -19,7 +19,11 @@ Phase notes
 
 from __future__ import annotations
 
+import html
+import json
 import os
+from contextlib import contextmanager
+from functools import lru_cache
 from typing import TYPE_CHECKING
 
 import streamlit as st
@@ -32,6 +36,45 @@ from ui.metrics_panel import (
 if TYPE_CHECKING:
     from core.llm_client import OllamaClient
     from core.pipeline import PipelineManager
+
+
+# ── Threat library ────────────────────────────────────────────────────────────
+
+@lru_cache(maxsize=1)
+def _load_threats() -> list[dict]:
+    """Load threat library from data/threats.json (cached for app lifetime).
+
+    Returns the raw category list. Returns an empty list if the file is
+    missing so the injection panel degrades gracefully.
+    """
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "threats.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+
+def _threat_options() -> tuple[list[str], dict[str, str]]:
+    """Build the flat selectbox option list and a label→example mapping.
+
+    Format: ``BT-01 · Prompt Injection (Basic Threats)``
+
+    Returns
+    -------
+    options:  List of display strings for st.selectbox.
+    examples: Dict mapping each display string to its ``example`` text.
+    """
+    categories = _load_threats()
+    options: list[str] = []
+    examples: dict[str, str] = {}
+    for cat in categories:
+        cat_name = cat.get("category", "")
+        for t in cat.get("threats", []):
+            label = f"{t.get('id', '?')} · {cat_name} · {t.get('type', '?')}"
+            options.append(label)
+            examples[label] = t.get("example", "")
+    return options, examples
 
 # ── Persona presets (from config.yaml Section 9.1) ────────────────────────────
 
@@ -206,11 +249,79 @@ def render(pipeline: "PipelineManager", config: dict) -> None:
     Called by app.py after Ollama is confirmed available, all required
     models are present, and the pipeline has been assembled.
     """
+    _inject_global_css()
     _render_sidebar(pipeline, config)
     _render_chat_area(pipeline, config)
 
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
+
+def _inject_global_css() -> None:
+    """Inject the shared CSS design-token :root block once per page render.
+
+    Every custom HTML element in chat_view.py and metrics_panel.py should
+    reference these variables (e.g. ``var(--c-block)``) rather than hard-coded
+    hex values, so a single edit here propagates everywhere.
+    """
+    st.markdown(
+        """
+        <style>
+        :root {
+          /* ── Semantic colours ──────────────────────────────────── */
+          --c-pass:    #9ECE6A;   /* gate pass, safe */
+          --c-block:   #F7768E;   /* gate block, danger */
+          --c-audit:   #E0AF68;   /* monitor/audit mode */
+          --c-error:   #FF9E64;   /* system error (distinct from block) */
+          --c-skip:    #555566;   /* gate skipped / OFF */
+          --c-info:    #7AA2F7;   /* informational accent, headings */
+          --c-purple:  #BB9AF7;   /* secondary accent */
+
+          /* ── Backgrounds ───────────────────────────────────────── */
+          --bg-base:    #1e1e2e;  /* main page */
+          --bg-surface: #262730;  /* cards, banners */
+          --bg-sidebar: #1a1a2e;  /* sidebar */
+          --bg-raise:   #2e2e3e;  /* elevated surfaces */
+
+          /* ── Typography ────────────────────────────────────────── */
+          --font-xs:   0.65rem;   /* section headers */
+          --font-sm:   0.72rem;   /* sidebar controls, gate labels, telemetry values */
+          --font-md:   0.82rem;   /* alert text, captions */
+          --font-base: 0.875rem;  /* body */
+
+          /* ── Spacing ───────────────────────────────────────────── */
+          --gap-xs: 2px;
+          --gap-sm: 4px;
+          --gap-md: 8px;
+          --gap-lg: 16px;
+        }
+
+        /* ── Reduce Streamlit's default generous top padding ────────────── */
+        /* Streamlit's toolbar is position:fixed (~2.875rem tall).          */
+        /* stMainBlockContainer has a further ~6rem default gap — trim it.  */
+        /* 3.5rem keeps the title safely below the fixed toolbar.           */
+        [data-testid="stMainBlockContainer"] {
+            padding-top: 3.5rem !important;
+            padding-bottom: 0.75rem !important;
+        }
+
+        /* ── Sticky right telemetry column ──────────────────────────────── */
+        /* Stick at 2.875rem (Streamlit's toolbar height) so the column     */
+        /* snaps just below the toolbar and never disappears as chat grows. */
+        section[data-testid="stMain"]
+            [data-testid="stHorizontalBlock"]
+            > [data-testid="stColumn"]:last-child {
+            position: -webkit-sticky !important;
+            position: sticky !important;
+            top: 2.875rem !important;
+            align-self: flex-start !important;
+            max-height: calc(100vh - 2.875rem) !important;
+            overflow-y: auto !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
 
 def _inject_sidebar_css() -> None:
     """Inject CSS that scales all native sidebar widgets down to match the
@@ -270,6 +381,64 @@ def _inject_sidebar_css() -> None:
         section[data-testid="stSidebar"] .stAlert p {
             font-size: 0.72rem !important;
         }
+        /* ── Expander summaries styled as section headers ─────────────── */
+        section[data-testid="stSidebar"] details > summary {
+            background: var(--bg-raise, #2e2e3e) !important;
+            border-radius: 3px !important;
+            margin: 2px 0 !important;
+            padding: 4px 6px !important;
+        }
+        section[data-testid="stSidebar"] details > summary p {
+            font-size: 0.68rem !important;
+            font-weight: 700 !important;
+            letter-spacing: 0.10em !important;
+            color: #cdd6f4 !important;
+            text-transform: uppercase !important;
+        }
+        /* ── Navigation radio — highlight active (selected) option ───── */
+        section[data-testid="stSidebar"] [data-testid="stRadio"] [data-baseweb="radio"]:has(input:checked) {
+            background: var(--bg-raise, #2e2e3e) !important;
+            border-radius: 4px !important;
+            padding: 2px 6px !important;
+        }
+
+        /* ── Sidebar vertical spacing — collapse Streamlit's defaults ── */
+        section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+            gap: 0 !important;
+        }
+        section[data-testid="stSidebar"] [data-testid="element-container"] {
+            margin-top: 0 !important;
+            margin-bottom: 0 !important;
+            padding-top: 0 !important;
+            padding-bottom: 0 !important;
+        }
+        section[data-testid="stSidebar"] .stSelectbox,
+        section[data-testid="stSidebar"] .stSlider,
+        section[data-testid="stSidebar"] .stTextInput,
+        section[data-testid="stSidebar"] .stTextArea,
+        section[data-testid="stSidebar"] .stToggle {
+            margin-bottom: 2px !important;
+            padding-bottom: 0 !important;
+        }
+        /* Reduce gap inside the horizontal column pairs (gate label + selectbox) */
+        section[data-testid="stSidebar"] [data-testid="stHorizontalBlock"] {
+            gap: 4px !important;
+        }
+
+        /* ── Selectbox open-menu option height ────────────────────────── */
+        /* Tighten the dropdown list items so opening a select doesn't     */
+        /* push half the sidebar off-screen.                               */
+        [data-baseweb="menu"] [role="option"] {
+            min-height: 28px !important;
+            padding-top: 4px !important;
+            padding-bottom: 4px !important;
+            font-size: 0.72rem !important;
+        }
+        /* Also fix the popover/menu list padding */
+        [data-baseweb="menu"] ul {
+            padding-top: 2px !important;
+            padding-bottom: 2px !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -277,11 +446,11 @@ def _inject_sidebar_css() -> None:
 
 
 def _sb_section(title: str) -> None:
-    """Sidebar section header — matches the right-panel telemetry style."""
+    """Sidebar section header — full-width background strip, white text, scannable anchor."""
     st.markdown(
-        f"<div style='font-size:0.65rem;color:#555566;font-weight:700;"
-        f"letter-spacing:0.09em;margin:10px 0 4px 0;padding-top:4px;"
-        f"border-top:1px solid #2a2a3a'>{title}</div>",
+        f"<div style='font-size:0.68rem;color:#cdd6f4;font-weight:700;"
+        f"letter-spacing:0.12em;margin:12px -1rem 6px -1rem;"
+        f"padding:5px 1rem;background:var(--bg-raise,#2e2e3e)'>{title}</div>",
         unsafe_allow_html=True,
     )
 
@@ -293,7 +462,7 @@ _MODE_COLORS  = {"OFF": "#555566", "AUDIT": "#E0AF68", "ENFORCE": "#F7768E"}
 def _gate_row(gate_key: str, label: str, default: str, help_text: str) -> str:
     """Render a compact gate-mode row (label + selectbox) and return the chosen mode."""
     current = st.session_state.gate_modes.get(gate_key, default)
-    col_lbl, col_sel = st.columns([3, 2])
+    col_lbl, col_sel = st.columns([2, 3])
     with col_lbl:
         color = _MODE_COLORS[current]
         st.markdown(
@@ -314,6 +483,44 @@ def _gate_row(gate_key: str, label: str, default: str, help_text: str) -> str:
         st.session_state.gate_modes[gate_key] = new_mode
         st.rerun()
     return new_mode
+
+
+@contextmanager
+def _gate_child(gate_key: str, mode: str):
+    """Context manager: render a gate child control (slider / text input) with a
+    subtle left-colour-bar accent that visually attaches it to the parent gate row.
+
+    Usage::
+
+        if tok_mode != "OFF":
+            with _gate_child("token_limit", tok_mode):
+                st.session_state.token_limit = st.slider(...)
+    """
+    color = _MODE_COLORS.get(mode, _MODE_COLORS["AUDIT"])
+    bar_col, ctrl_col = st.columns([1, 24])
+    with bar_col:
+        st.markdown(
+            f"<div style='background:{color}55;border-radius:2px;"
+            f"width:2px;height:34px;margin:6px auto 0'></div>",
+            unsafe_allow_html=True,
+        )
+    with ctrl_col:
+        yield
+
+
+def _render_demo_toggle() -> None:
+    """Render the Demo Mode toggle in the SESSION section (bottom of sidebar)."""
+    demo_mode = st.toggle(
+        "Demo Mode",
+        value=st.session_state.demo_mode,
+        help=(
+            "ON: Clean chatbot view — hides all security instrumentation.\n"
+            "OFF: Full workbench — shows gate badges, telemetry, and controls."
+        ),
+    )
+    if demo_mode != st.session_state.demo_mode:
+        st.session_state.demo_mode = demo_mode
+        st.rerun()
 
 
 def _render_sidebar(pipeline: "PipelineManager", config: dict) -> None:
@@ -344,19 +551,13 @@ def _render_sidebar(pipeline: "PipelineManager", config: dict) -> None:
                 st.session_state.messages = []
                 st.rerun()
 
-        demo_mode = st.toggle(
-            "Demo Mode",
-            value=st.session_state.demo_mode,
-            help=(
-                "ON: Clean chatbot view — hides all security instrumentation.\n"
-                "OFF: Full workbench — shows gate badges, telemetry, and controls."
-            ),
-        )
-        if demo_mode != st.session_state.demo_mode:
-            st.session_state.demo_mode = demo_mode
-            st.rerun()
-
+        # ── Demo Mode: show minimal sidebar when active ────────────────────
         if st.session_state.demo_mode:
+            _sb_section("SESSION")
+            _render_demo_toggle()
+            if st.button("Clear Chat History", use_container_width=True):
+                st.session_state.messages = []
+                st.rerun()
             return
 
         # ── CONTEXT ───────────────────────────────────────────────────────────
@@ -381,122 +582,124 @@ def _render_sidebar(pipeline: "PipelineManager", config: dict) -> None:
             )
 
         # ── INPUT GATES ───────────────────────────────────────────────────────
-        _sb_section("INPUT GATES")
+        with st.expander("Input Gates", expanded=True):
+            # custom_regex (hot-patch)
+            regex_mode = _gate_row(
+                "custom_regex", "Regex Hot-Patch", "AUDIT",
+                "Comma-separated block phrases. Checked against raw user input.\n"
+                "ENFORCE: blocks immediately on any match.",
+            )
+            if regex_mode != "OFF":
+                with _gate_child("custom_regex", regex_mode):
+                    st.session_state.custom_block_phrases = st.text_input(
+                        "Block phrases",
+                        value=st.session_state.custom_block_phrases,
+                        placeholder="ignore previous, jailbreak, DAN …",
+                        label_visibility="collapsed",
+                    )
 
-        # custom_regex (hot-patch)
-        regex_mode = _gate_row(
-            "custom_regex", "Regex Hot-Patch", "AUDIT",
-            "Comma-separated block phrases. Checked against raw user input.\n"
-            "ENFORCE: blocks immediately on any match.",
-        )
-        if regex_mode != "OFF":
-            st.session_state.custom_block_phrases = st.text_input(
-                "Block phrases",
-                value=st.session_state.custom_block_phrases,
-                placeholder="ignore previous, jailbreak, DAN …",
-                label_visibility="collapsed",
+            # token_limit
+            tok_mode = _gate_row(
+                "token_limit", "Token Limit", "ENFORCE",
+                "Rejects prompts exceeding the token budget (tiktoken, < 1ms).\n"
+                "ENFORCE: blocks before any ML gate runs.",
+            )
+            if tok_mode != "OFF":
+                with _gate_child("token_limit", tok_mode):
+                    st.session_state.token_limit = st.slider(
+                        "Max tokens", 64, 4096,
+                        int(st.session_state.get("token_limit", 512)), 64,
+                        label_visibility="collapsed",
+                    )
+
+            # invisible_text
+            _gate_row(
+                "invisible_text", "Invisible Text", "ENFORCE",
+                "Detects zero-width / steganography Unicode chars (< 1ms).",
             )
 
-        # token_limit
-        tok_mode = _gate_row(
-            "token_limit", "Token Limit", "ENFORCE",
-            "Rejects prompts exceeding the token budget (tiktoken, < 1ms).\n"
-            "ENFORCE: blocks before any ML gate runs.",
-        )
-        if tok_mode != "OFF":
-            st.session_state.token_limit = st.slider(
-                "Max tokens", 64, 4096,
-                int(st.session_state.get("token_limit", 512)), 64,
-                label_visibility="collapsed",
+            # fast_scan
+            scan_mode = _gate_row(
+                "fast_scan", "PII / Secrets", "AUDIT",
+                "Presidio Anonymize + Secrets scanners (CPU).\n"
+                "AUDIT: masks PII in prompt, logs, continues.\n"
+                "ENFORCE: blocks if PII or secrets detected.",
+            )
+            if scan_mode != "OFF":
+                with _gate_child("fast_scan", scan_mode):
+                    st.session_state.pii_threshold = st.slider(
+                        "PII threshold", 0.1, 1.0,
+                        float(st.session_state.get("pii_threshold", 0.7)), 0.05,
+                        help="Presidio entity confidence cutoff (0.7 recommended).",
+                        label_visibility="collapsed",
+                    )
+
+            # classify / toxicity_in
+            _gate_row(
+                "classify", "Injection Detect", "AUDIT",
+                "DeBERTa injection/jailbreak classifier (CPU).\n"
+                "ENFORCE: blocks when threat score ≥ threshold.",
+            )
+            _gate_row(
+                "toxicity_in", "Toxicity (Input)", "AUDIT",
+                "Hostile/abusive input tone (Toxicity + Sentiment).\n"
+                "AUDIT recommended — never block on tone alone.",
             )
 
-        # invisible_text
-        _gate_row(
-            "invisible_text", "Invisible Text", "ENFORCE",
-            "Detects zero-width / steganography Unicode chars (< 1ms).",
-        )
-
-        # fast_scan
-        scan_mode = _gate_row(
-            "fast_scan", "PII / Secrets", "AUDIT",
-            "Presidio Anonymize + Secrets scanners (CPU).\n"
-            "AUDIT: masks PII in prompt, logs, continues.\n"
-            "ENFORCE: blocks if PII or secrets detected.",
-        )
-        if scan_mode != "OFF":
-            st.session_state.pii_threshold = st.slider(
-                "PII threshold", 0.1, 1.0,
-                float(st.session_state.get("pii_threshold", 0.7)), 0.05,
-                help="Presidio entity confidence cutoff (0.7 recommended).",
-                label_visibility="collapsed",
+            # ban_topics
+            ban_mode = _gate_row(
+                "ban_topics", "Ban Topics", "AUDIT",
+                "Zero-shot topic filter — semantic, not keyword.\n"
+                "ENFORCE: blocks if any configured topic is detected.",
             )
+            if ban_mode != "OFF":
+                with _gate_child("ban_topics", ban_mode):
+                    st.session_state.ban_topics_list = st.text_input(
+                        "Banned topics",
+                        value=st.session_state.get("ban_topics_list", ""),
+                        placeholder="weapons, self-harm, politics …",
+                        label_visibility="collapsed",
+                    )
 
-        # classify / toxicity_in
-        _gate_row(
-            "classify", "Injection Detect", "AUDIT",
-            "DeBERTa injection/jailbreak classifier (CPU).\n"
-            "ENFORCE: blocks when threat score ≥ threshold.",
-        )
-        _gate_row(
-            "toxicity_in", "Toxicity (Input)", "AUDIT",
-            "Hostile/abusive input tone (Toxicity + Sentiment).\n"
-            "AUDIT recommended — never block on tone alone.",
-        )
-
-        # ban_topics
-        ban_mode = _gate_row(
-            "ban_topics", "Ban Topics", "AUDIT",
-            "Zero-shot topic filter — semantic, not keyword.\n"
-            "ENFORCE: blocks if any configured topic is detected.",
-        )
-        if ban_mode != "OFF":
-            st.session_state.ban_topics_list = st.text_input(
-                "Banned topics",
-                value=st.session_state.get("ban_topics_list", ""),
-                placeholder="weapons, self-harm, politics …",
-                label_visibility="collapsed",
+            # mod_llm (LLM judge)
+            _gate_row(
+                "mod_llm", "Llama Guard 3", "AUDIT",
+                "LLM-as-judge: 14 harm categories (S1–S14).\n"
+                "Requires llama-guard3 in Ollama.\n"
+                "ENFORCE: blocks on any safety violation.",
             )
-
-        # mod_llm (LLM judge)
-        _gate_row(
-            "mod_llm", "Llama Guard 3", "AUDIT",
-            "LLM-as-judge: 14 harm categories (S1–S14).\n"
-            "Requires llama-guard3 in Ollama.\n"
-            "ENFORCE: blocks on any safety violation.",
-        )
 
         # ── OUTPUT GATES ──────────────────────────────────────────────────────
-        _sb_section("OUTPUT GATES")
-
-        _gate_row(
-            "sensitive_out", "PII (Output)", "AUDIT",
-            "Catches PII the LLM hallucinated — invisible to input-side scan.\n"
-            "ENFORCE: redacts with placeholders.",
-        )
-        _gate_row(
-            "malicious_urls", "Malicious URLs", "ENFORCE",
-            "Heuristic + ML URL classifier.\n"
-            "ENFORCE: removes detected URLs from response.",
-        )
-        _gate_row(
-            "no_refusal", "Refusal Detect", "AUDIT",
-            "Flags when the model declines to answer.\n"
-            "Useful for red-team / over-blocking analysis.",
-        )
-        _gate_row(
-            "bias_out", "Bias / Toxicity", "AUDIT",
-            "Bias + Toxicity in model responses (monitoring only).",
-        )
-        _gate_row(
-            "relevance", "Relevance", "AUDIT",
-            "Off-topic / hallucination via embedding similarity.\n"
-            "Low score = response drifted from the question.",
-        )
-        _gate_row(
-            "deanonymize", "PII Restore", "ENFORCE",
-            "Swaps [REDACTED_*] placeholders back to original values.\n"
-            "Requires FastScan to be active.",
-        )
+        with st.expander("Output Gates", expanded=True):
+            _gate_row(
+                "sensitive_out", "PII (Output)", "AUDIT",
+                "Catches PII the LLM hallucinated — invisible to input-side scan.\n"
+                "ENFORCE: redacts with placeholders.",
+            )
+            _gate_row(
+                "malicious_urls", "Malicious URLs", "ENFORCE",
+                "Heuristic + ML URL classifier.\n"
+                "ENFORCE: removes detected URLs from response.",
+            )
+            _gate_row(
+                "no_refusal", "Refusal Detect", "AUDIT",
+                "Flags when the model declines to answer.\n"
+                "Useful for red-team / over-blocking analysis.",
+            )
+            _gate_row(
+                "bias_out", "Bias / Toxicity", "AUDIT",
+                "Bias + Toxicity in model responses (monitoring only).",
+            )
+            _gate_row(
+                "relevance", "Relevance", "AUDIT",
+                "Off-topic / hallucination via embedding similarity.\n"
+                "Low score = response drifted from the question.",
+            )
+            _gate_row(
+                "deanonymize", "PII Restore", "ENFORCE",
+                "Swaps [REDACTED_*] placeholders back to original values.\n"
+                "Requires FastScan to be active.",
+            )
 
         # ── GENERATION ────────────────────────────────────────────────────────
         _sb_section("GENERATION")
@@ -524,6 +727,8 @@ def _render_sidebar(pipeline: "PipelineManager", config: dict) -> None:
 
         # ── SESSION ───────────────────────────────────────────────────────────
         _sb_section("SESSION")
+        _render_threat_panel()
+        _render_demo_toggle()
         if st.button("Clear Chat History", use_container_width=True):
             st.session_state.messages = []
             st.rerun()
@@ -556,7 +761,7 @@ def _render_chat_area(pipeline: "PipelineManager", config: dict) -> None:
     _ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
     _model       = st.session_state.get("target_model", "llama3")
 
-    chat_col, tel_col = st.columns([3, 1], gap="medium")
+    chat_col, tel_col = st.columns([5, 2], gap="medium")
     with chat_col:
         _render_chat_content(pipeline, config, prompt)
     with tel_col:
@@ -571,20 +776,17 @@ def _render_chat_content(pipeline: "PipelineManager", config: dict, prompt: str 
             unsafe_allow_html=True,
         )
     else:
-        col_title, col_badge = st.columns([6, 1])
-        with col_title:
-            st.markdown(
-                "<h3 style='color:#7AA2F7;margin-bottom:0'>LLM Security Workbench</h3>",
-                unsafe_allow_html=True,
-            )
-        with col_badge:
-            st.markdown(
-                "<div style='text-align:right;padding-top:8px'>"
-                "<span style='background:#262730;color:#9ECE6A;"
-                "padding:3px 10px;border-radius:4px;font-size:0.75rem'>"
-                "WORKBENCH</span></div>",
-                unsafe_allow_html=True,
-            )
+        st.markdown(
+            "<div style='display:flex;align-items:center;gap:10px;"
+            "margin-bottom:4px;margin-top:0'>"
+            "<span style='color:#7AA2F7;font-size:1.05rem;font-weight:700'>"
+            "LLM Security Workbench</span>"
+            "<span style='background:#262730;color:#9ECE6A;"
+            "padding:2px 8px;border-radius:4px;font-size:0.65rem;"
+            "font-weight:600;letter-spacing:0.06em'>WORKBENCH</span>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
 
     # ── RAG / System Context (hidden in Demo Mode) ─────────────────────────────
     if not st.session_state.demo_mode:
@@ -609,69 +811,98 @@ def _render_chat_content(pipeline: "PipelineManager", config: dict, prompt: str 
 
     # ── Pipeline status banner (workbench mode only) ──────────────────────────
     if not st.session_state.demo_mode:
-        active_gates = [
-            (name, st.session_state.gate_modes.get(name, "AUDIT"))
-            for name, _ in pipeline.input_gates + pipeline.output_gates
-            if st.session_state.gate_modes.get(name, "AUDIT") != "OFF"
-        ]
-        if active_gates:
-            gate_badges = " ".join(
-                f"<span style='background:{_MODE_BG[m]};color:{_MODE_COLOR[m]};"
-                f"padding:1px 7px;border-radius:3px;font-size:0.72rem'>{n}: {m}</span>"
-                for n, m in active_gates
+        _render_pipeline_banner(pipeline)
+
+    # ── Threat pre-fill staging area ──────────────────────────────────────────
+    # When the Inject button writes to inject_prompt, show an editable text area
+    # with Send / Cancel controls before the chat history. On Send the staged
+    # text is processed exactly like a normal user prompt; on Cancel it is cleared.
+    if not st.session_state.demo_mode and st.session_state.get("inject_prompt"):
+        staged = st.session_state.inject_prompt
+        st.markdown(
+            "<div style='background:rgba(224,175,104,0.08);border-left:3px solid #E0AF68;"
+            "border-radius:4px;padding:5px 10px 2px 10px;margin:4px 0 6px 0;"
+            "font-size:0.65rem;color:#E0AF68;font-weight:700;letter-spacing:0.08em'>"
+            "⚡ THREAT STAGED — edit if needed, then Send</div>",
+            unsafe_allow_html=True,
+        )
+        edited = st.text_area(
+            "staged_threat",
+            value=staged,
+            height=100,
+            label_visibility="collapsed",
+            key="inject_staged_text",
+        )
+        s_col, c_col = st.columns([1, 1], gap="small")
+        with s_col:
+            send_clicked = st.button(
+                "Send threat →", key="inject_send_btn", use_container_width=True, type="primary"
             )
-            st.markdown(
-                f"<div style='background:#262730;border-left:3px solid #7AA2F7;"
-                f"padding:7px 12px;border-radius:4px;margin-bottom:10px'>"
-                f"🔒 Pipeline active — {gate_badges}</div>",
-                unsafe_allow_html=True,
+        with c_col:
+            cancel_clicked = st.button(
+                "Cancel", key="inject_cancel_btn", use_container_width=True
             )
-        else:
-            st.markdown(
-                "<div style='background:#262730;border-left:3px solid #444;"
-                "padding:7px 12px;border-radius:4px;margin-bottom:10px;"
-                "font-size:0.82rem;color:#555'>"
-                "🔓 All gates OFF — prompts reach the LLM unfiltered</div>",
-                unsafe_allow_html=True,
-            )
+        if cancel_clicked:
+            st.session_state.inject_prompt = ""
+            st.rerun()
+        if send_clicked and edited.strip():
+            # Route through the normal prompt handler by overwriting the `prompt`
+            # variable in the calling scope — achieved by mutating session state
+            # and forcing the prompt to be treated as if typed.
+            st.session_state.inject_prompt = ""
+            prompt = edited.strip()
 
     # ── Chat history ───────────────────────────────────────────────────────────
+    # Pre-compute the index of the most-recent assistant message with trace data
+    # so we can open that inspector by default and collapse all older ones.
+    _last_trace_idx: int = max(
+        (i for i, m in enumerate(st.session_state.messages)
+         if m.get("role") == "assistant" and m.get("raw_traces")),
+        default=-1,
+    )
+
     for _msg_idx, msg in enumerate(st.session_state.messages):
         with st.chat_message(msg["role"]):
-            # Blocked assistant turns rendered as errors
+            # Blocked assistant turns rendered as themed callouts
             if msg.get("blocked"):
                 if st.session_state.demo_mode:
                     st.warning(msg["content"])
                 else:
-                    st.error(msg["content"])
+                    _blocking_metric = next(
+                        (m for m in (msg.get("gate_metrics") or [])
+                         if m.get("verdict") == "BLOCK"),
+                        None,
+                    )
+                    _blocking_gate   = _blocking_metric["gate_name"] if _blocking_metric else "unknown gate"
+                    _blocking_lat    = _blocking_metric.get("latency_ms", 0.0) if _blocking_metric else 0.0
+                    # Determine context from gate position (input gates block before inference)
+                    _ctx = "output" if _blocking_gate in {
+                        "sensitive_out", "malicious_urls", "no_refusal",
+                        "bias_out", "relevance", "deanonymize",
+                    } else "input"
+                    _block_banner(_blocking_gate, _blocking_lat, context=_ctx)
             else:
                 st.markdown(msg["content"])
 
             if msg["role"] == "assistant" and not st.session_state.demo_mode:
-                # Gate metric badges
-                if msg.get("gate_metrics"):
-                    _render_gate_metrics(msg["gate_metrics"])
-                # Token telemetry + context bar
+                # Gate badges + token stat in unified footer card
+                _render_turn_footer(
+                    metrics=msg.get("gate_metrics"),
+                    telemetry=None if msg.get("blocked") else (msg.get("telemetry") or {}),
+                )
+                # Context bar (non-blocked turns only)
                 t = msg.get("telemetry") or {}
                 if t and not msg.get("blocked"):
-                    st.caption(
-                        f"⚡ {t.get('prompt_tokens', 0)} prompt · "
-                        f"{t.get('completion_tokens', 0)} completion · "
-                        f"{t.get('tokens_per_second', 0.0):.1f} t/s"
-                    )
                     _ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
                     _model = st.session_state.get("target_model", "llama3")
-                    render_context_bar(
-                        t.get("prompt_tokens", 0),
-                        _model,
-                        _ollama_host,
-                    )
-                # API Inspector
+                    render_context_bar(t.get("prompt_tokens", 0), _model, _ollama_host)
+                # Pipeline Trace — open for most-recent turn, collapsed for history
                 if msg.get("raw_traces"):
                     render_api_inspector(
                         msg["raw_traces"],
                         msg.get("gate_metrics") or [],
                         idx=_msg_idx,
+                        expanded=(_msg_idx == _last_trace_idx),
                     )
 
     # ── Chat input ─────────────────────────────────────────────────────────────
@@ -697,17 +928,16 @@ def _render_chat_content(pipeline: "PipelineManager", config: dict, prompt: str 
                     full_response = "I cannot fulfill this request due to security policies."
                     st.warning(full_response)
                 else:
-                    blocking_gate = next(
-                        (m["gate_name"] for m in reversed(payload.metrics)
+                    _blk_metric = next(
+                        (m for m in reversed(payload.metrics)
                          if m.get("verdict") == "BLOCK"),
-                        "unknown gate",
+                        None,
                     )
-                    full_response = (
-                        f"🚫 **Blocked by `{blocking_gate}`**\n\n"
-                        f"{payload.block_reason}"
-                    )
-                    st.error(full_response)
-                    _render_gate_metrics(payload.metrics)
+                    blocking_gate = _blk_metric["gate_name"] if _blk_metric else "unknown gate"
+                    blocking_lat  = _blk_metric.get("latency_ms", 0.0) if _blk_metric else 0.0
+                    full_response = f"🚫 Blocked by `{blocking_gate}`"
+                    _block_banner(blocking_gate, blocking_lat, context="input")
+                    _render_turn_footer(payload.metrics)
 
                 stream_result = None
 
@@ -760,15 +990,14 @@ def _render_chat_content(pipeline: "PipelineManager", config: dict, prompt: str 
                     if st.session_state.demo_mode:
                         st.warning("I cannot fulfill this request due to security policies.")
                     else:
-                        blocking_gate = next(
-                            (m["gate_name"] for m in reversed(payload.metrics)
+                        _out_blk = next(
+                            (m for m in reversed(payload.metrics)
                              if m.get("verdict") == "BLOCK"),
-                            "unknown gate",
+                            None,
                         )
-                        st.error(
-                            f"🚫 **Output blocked by `{blocking_gate}`:** "
-                            f"{payload.block_reason}"
-                        )
+                        _out_gate = _out_blk["gate_name"] if _out_blk else "unknown gate"
+                        _out_lat  = _out_blk.get("latency_ms", 0.0) if _out_blk else 0.0
+                        _block_banner(_out_gate, _out_lat, context="output")
 
                 # 5. Redaction notices — input-side and output-side PII events
                 if not st.session_state.demo_mode:
@@ -812,12 +1041,12 @@ def _render_chat_content(pipeline: "PipelineManager", config: dict, prompt: str 
                         None,
                     )
                     if malicious_url_block:
-                        st.error(
-                            "**Malicious URL detected and removed** — "
-                            "A URL in the model's response was classified as malicious or a phishing attempt. "
-                            "It has been replaced with `[REDACTED_URL]` in the response above.  \n"
-                            f"*Reason: {malicious_url_block['detail']}*",
-                            icon="⛔",
+                        _violation_callout(
+                            "🔴 Malicious URL detected and removed",
+                            "A URL in the model's response was classified as malicious or a "
+                            "phishing attempt. It has been replaced with [REDACTED_URL] in the "
+                            f"response above. Reason: {malicious_url_block['detail']}",
+                            variant="block",
                         )
 
                     no_refusal_block = next(
@@ -915,22 +1144,24 @@ def _render_chat_content(pipeline: "PipelineManager", config: dict, prompt: str 
 
                 # 6. Telemetry (workbench mode only)
                 if not st.session_state.demo_mode:
-                    _render_gate_metrics(payload.metrics)
+                    _tel = {
+                        "prompt_tokens":    payload.prompt_tokens,
+                        "completion_tokens": payload.completion_tokens,
+                        "tokens_per_second": payload.tokens_per_second,
+                    } if stream_result else {}
+                    _render_turn_footer(payload.metrics, _tel)
                     if stream_result:
-                        st.caption(
-                            f"⚡ {payload.prompt_tokens} prompt · "
-                            f"{payload.completion_tokens} completion · "
-                            f"{payload.tokens_per_second:.1f} t/s"
-                        )
                         # Persist TPS so the sidebar hw panel can display it
                         st.session_state.last_tps = payload.tokens_per_second
                         # Context window utilisation bar
                         _ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
                         _model = st.session_state.get("target_model", "llama3")
                         render_context_bar(payload.prompt_tokens, _model, _ollama_host)
-                    # API Inspector — raw gate traces
+                    # Pipeline Trace — always open for the live current turn
                     if payload.raw_traces:
-                        render_api_inspector(payload.raw_traces, payload.metrics)
+                        render_api_inspector(
+                            payload.raw_traces, payload.metrics, expanded=True
+                        )
 
         # 6. Persist telemetry for the right-side Live Telemetry Panel.
         #    Written unconditionally so the panel always reflects the last turn.
@@ -953,6 +1184,7 @@ def _render_chat_content(pipeline: "PipelineManager", config: dict, prompt: str 
             "role": "assistant",
             "content": payload.output_text if payload.output_text else full_response,
             "blocked": payload.is_blocked,
+            "block_reason": payload.block_reason if payload.is_blocked else "",
             "gate_metrics": payload.metrics,
             "raw_traces": dict(payload.raw_traces),
             "telemetry": {
@@ -974,7 +1206,7 @@ _VERDICT_COLOR: dict[str, str] = {
     "PASS":  "#9ECE6A",   # green
     "BLOCK": "#F7768E",   # red
     "AUDIT": "#E0AF68",   # amber  (BLOCK verdict in AUDIT mode)
-    "ERROR": "#E0AF68",   # amber
+    "ERROR": "#FF9E64",   # orange — distinct from AUDIT amber
     "SKIP":  "#555566",   # dim
 }
 
@@ -990,32 +1222,300 @@ _MODE_BG: dict[str, str] = {
     "ENFORCE": "#F7768E20",
 }
 
+# Emoji indicators for each gate verdict (used in post-message badge row)
+_VERDICT_EMOJI: dict[str, str] = {
+    "PASS":  "🟢",
+    "BLOCK": "🔴",
+    "AUDIT": "🟡",
+    "ERROR": "🟠",
+    "SKIP":  "⚫",
+}
+
+# Short names for post-message badge row
+_GATE_SHORT: dict[str, str] = {
+    "custom_regex":   "Regex",
+    "token_limit":    "Token",
+    "invisible_text": "Invis",
+    "fast_scan":      "PII",
+    "classify":       "Inject",
+    "toxicity_in":    "Toxic",
+    "ban_topics":     "Topics",
+    "mod_llm":        "Guard",
+    "sensitive_out":  "PII-Out",
+    "malicious_urls": "URLs",
+    "no_refusal":     "Refusal",
+    "bias_out":       "Bias",
+    "relevance":      "Rel",
+    "deanonymize":    "Deanon",
+}
+
+# Full names for pipeline banner details table
+_GATE_LABEL: dict[str, str] = {
+    "custom_regex":   "Regex Hot-Patch",
+    "token_limit":    "Token Limit",
+    "invisible_text": "Invisible Text",
+    "fast_scan":      "PII / Secrets",
+    "classify":       "Injection Detect",
+    "toxicity_in":    "Toxicity (Input)",
+    "ban_topics":     "Ban Topics",
+    "mod_llm":        "Llama Guard 3",
+    "sensitive_out":  "PII (Output)",
+    "malicious_urls": "Malicious URLs",
+    "no_refusal":     "Refusal Detect",
+    "bias_out":       "Bias / Toxicity",
+    "relevance":      "Relevance",
+    "deanonymize":    "PII Restore",
+}
+
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
-def _render_gate_metrics(metrics: list[dict]) -> None:
-    """Render coloured verdict badges for each gate that ran."""
-    if not metrics:
-        return
-    badges = ""
+def _block_banner(gate_name: str, latency_ms: float, context: str = "input") -> None:
+    """Single-line compact banner for a hard ENFORCE-gate block.
+
+    Deliberately minimal — the message was stopped; there is nothing to read.
+    For AUDIT notices (content shown, detail needed) use _violation_callout instead.
+
+    Parameters
+    ----------
+    gate_name:  Internal gate key (e.g. ``"classify"``).
+    latency_ms: Gate latency so the user can see the cost of the check.
+    context:    ``"input"`` → blocked before inference;
+                ``"output"`` → blocked/suppressed after inference.
+    """
+    label    = _GATE_LABEL.get(gate_name, gate_name)
+    ms_part  = f" · {latency_ms:,.0f} ms" if latency_ms > 0 else ""
+    suffix   = (
+        "input never reached the model"
+        if context == "input"
+        else "response was suppressed"
+    )
+    safe_txt = html.escape(f"{label}{ms_part} — {suffix}")
+    st.markdown(
+        f"<div style='display:flex;align-items:center;gap:8px;"
+        f"background:rgba(247,118,142,0.09);border-left:3px solid #F7768E;"
+        f"border-radius:4px;padding:5px 12px;margin:4px 0'>"
+        f"<span style='font-size:0.9rem'>🛡️</span>"
+        f"<span style='color:#F7768E;font-size:0.78rem;font-weight:600'>"
+        f"Blocked by {safe_txt}</span>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _violation_callout(title: str, body: str, variant: str = "block") -> None:
+    """Render a themed security callout box instead of ``st.error()`` / ``st.warning()``.
+
+    Uses CSS design tokens when available (injected via ``_inject_global_css``),
+    with literal-hex fallbacks so the element is styled correctly even before the
+    ``<style>`` block is processed.
+
+    Parameters
+    ----------
+    title:   Bold header line (will be HTML-escaped).
+    body:    Detail text (newlines → ``<br>``; will be HTML-escaped).
+    variant: ``"block"`` | ``"warn"`` | ``"info"`` | ``"error"``
+    """
+    _VARIANTS: dict[str, tuple[str, str]] = {
+        "block": ("var(--c-block, #F7768E)", "rgba(247,118,142,0.08)"),
+        "warn":  ("var(--c-audit, #E0AF68)", "rgba(224,175,104,0.08)"),
+        "info":  ("var(--c-info,  #7AA2F7)", "rgba(122,162,247,0.08)"),
+        "error": ("var(--c-error, #FF9E64)", "rgba(255,158,100,0.08)"),
+    }
+    border_c, bg_c = _VARIANTS.get(variant, _VARIANTS["block"])
+    safe_title = html.escape(title)
+    safe_body  = html.escape(body).replace("\n", "<br>")
+    st.markdown(
+        f"<div style='background:{bg_c};border-left:3px solid {border_c};"
+        f"border-radius:4px;padding:8px 12px;margin:4px 0'>"
+        f"<div style='color:{border_c};font-weight:600;font-size:var(--font-md,0.82rem);"
+        f"margin-bottom:4px'>{safe_title}</div>"
+        f"<div style='color:#cdd6f4;font-size:var(--font-md,0.82rem)'>{safe_body}</div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _gate_badges_html(metrics: list[dict]) -> str:
+    """Return the HTML badge row for gate results.
+
+    Format: 🟢 Regex  🔴 Bias 0.46  🟡 PII
+    SKIP gates are omitted. Score shown only when non-zero (> 0.005).
+    Hover tooltip shows the gate's detail string.
+    """
+    parts = []
     for m in metrics:
-        verdict = m.get("verdict", "?")
-        color = _VERDICT_COLOR.get(verdict, "#888")
-        gate = m.get("gate_name", "?")
-        latency = m.get("latency_ms", 0.0)
+        verdict = m.get("verdict", "PASS")
+        if verdict == "SKIP":
+            continue
+        gate   = m.get("gate_name", "?")
+        score  = float(m.get("score", 0.0))
         detail = m.get("detail", "")
-        clean = detail.replace("\r", "").replace("\n", " ").strip()
-        if len(clean) > 300:
-            clean = clean[:297] + "..."
-        title = clean.replace("&", "&amp;").replace('"', "&quot;").replace("'", "&#39;")
-        badges += (
-            f'<span title="{title}" style="'
-            f"background:{color}18;color:{color};"
-            f"border:1px solid {color}44;padding:1px 8px;"
-            f'border-radius:4px;font-size:0.73rem;margin-right:5px">'
-            f"{gate}: {verdict} ({latency:.1f}ms)</span>"
+        clean  = detail.replace("\r", "").replace("\n", " ").strip()
+        if len(clean) > 280:
+            clean = clean[:277] + "…"
+        tip   = html.escape(clean).replace('"', "&quot;")
+        label = _GATE_SHORT.get(gate, gate)
+        emoji = _VERDICT_EMOJI.get(verdict, "⚪")
+        color = _VERDICT_COLOR.get(verdict, "#888")
+        score_part = (
+            f"&thinsp;<span style='color:{color};font-size:0.68rem'>{score:.2f}</span>"
+            if score > 0.005 else ""
         )
-    st.markdown(badges, unsafe_allow_html=True)
+        parts.append(
+            f'<span title="{tip}" style="margin-right:8px;'
+            f"font-size:var(--font-sm,0.72rem);white-space:nowrap;"
+            f'cursor:default">'
+            f"{emoji}&nbsp;{html.escape(label)}{score_part}"
+            f"</span>"
+        )
+    return "".join(parts)
+
+
+def _render_turn_footer(
+    metrics: list[dict] | None,
+    telemetry: dict | None = None,
+) -> None:
+    """Render gate result badges + token stat in a single surface card.
+
+    Replaces the old ``_render_gate_metrics`` + ``st.caption`` pair so both
+    elements share the same ``--bg-surface`` background, making them look like
+    one cohesive block beneath each assistant message.
+
+    Parameters
+    ----------
+    metrics:   Gate metric dicts from the pipeline run (``None`` / ``[]`` → skip).
+    telemetry: Dict with ``prompt_tokens``, ``completion_tokens``,
+               ``tokens_per_second``. Pass ``None`` to omit the token stat row.
+    """
+    badges_html = _gate_badges_html(metrics or [])
+
+    tel      = telemetry or {}
+    prompt_t = tel.get("prompt_tokens", 0)
+    compl_t  = tel.get("completion_tokens", 0)
+    tps      = tel.get("tokens_per_second", 0.0)
+    has_tel  = bool(prompt_t or compl_t or tps)
+
+    token_html = (
+        f"<div style='margin-top:5px;color:var(--c-info,#7AA2F7);"
+        f"font-size:var(--font-sm,0.72rem)'>"
+        f"⚡ {prompt_t} prompt · {compl_t} completion · {tps:.1f} t/s"
+        f"</div>"
+    ) if has_tel else ""
+
+    if not badges_html and not token_html:
+        return
+
+    sep = (
+        "<div style='border-bottom:1px solid #2a2a3a;margin:5px 0'></div>"
+        if badges_html and token_html else ""
+    )
+
+    st.markdown(
+        f"<div style='background:var(--bg-surface,#262730);border-radius:4px;"
+        f"padding:6px 10px;margin:4px 0'>"
+        f"{badges_html}{sep}{token_html}"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _render_threat_panel() -> None:
+    """Render the threat injection control row (workbench mode only).
+
+    Displays a flat selectbox of all threats from ``data/threats.json``
+    and an Inject button. Clicking Inject writes the selected threat's
+    ``example`` text to ``st.session_state.inject_prompt`` and reruns,
+    which causes ``_render_chat_content`` to show the pre-fill staging area.
+    Hidden in Demo Mode.
+    """
+    options, examples = _threat_options()
+    if not options:
+        return
+
+    selected = st.selectbox(
+        "INSERT THREAT",
+        options,
+        index=0,
+        key="threat_select",
+    )
+    if st.button("⚡ Inject threat", key="threat_inject_btn", use_container_width=True):
+        st.session_state.inject_prompt = examples.get(selected, "")
+        st.rerun()
+
+
+def _render_pipeline_banner(pipeline: "PipelineManager") -> None:
+    """Render the pipeline status banner: 3-number mode summary + expandable gate table.
+
+    Replaces the old "badge flood" that listed every active gate inline.
+    The summary line teaches posture distribution at a glance:
+
+        🔒 Pipeline active   AUDIT 9   ENFORCE 2   OFF 1
+
+    Clicking "Gate details" expands a two-column table (INPUT / OUTPUT) showing
+    each gate's friendly name and mode, coloured by the workbench signal palette.
+    The all-OFF dimmed banner is preserved for that state.
+    """
+    all_gates  = pipeline.input_gates + pipeline.output_gates
+    gate_modes = st.session_state.gate_modes
+
+    audit_n   = sum(1 for n, _ in all_gates if gate_modes.get(n) == "AUDIT")
+    enforce_n = sum(1 for n, _ in all_gates if gate_modes.get(n) == "ENFORCE")
+    off_n     = len(all_gates) - audit_n - enforce_n
+
+    if audit_n + enforce_n == 0:
+        st.markdown(
+            "<div style='background:var(--bg-surface,#262730);"
+            "border-left:3px solid #444;padding:7px 12px;"
+            "border-radius:4px;margin-bottom:10px;"
+            "font-size:var(--font-md,0.82rem);color:#555'>"
+            "🔓 All gates OFF — prompts reach the LLM unfiltered</div>",
+            unsafe_allow_html=True,
+        )
+        return
+
+    c_a = "var(--c-audit,#E0AF68)"
+    c_e = "var(--c-block,#F7768E)"
+    c_o = "var(--c-skip,#555566)"
+
+    st.markdown(
+        f"<div style='background:var(--bg-surface,#262730);"
+        f"border-left:3px solid var(--c-info,#7AA2F7);padding:7px 12px;"
+        f"border-radius:4px;margin-bottom:4px;display:flex;"
+        f"align-items:center;gap:16px;flex-wrap:wrap;"
+        f"font-size:var(--font-md,0.82rem)'>"
+        f"🔒&ensp;<span style='color:#cdd6f4'>Pipeline active</span>"
+        f"&ensp;<span style='color:{c_a}'><b>AUDIT</b>&thinsp;{audit_n}</span>"
+        f"&ensp;<span style='color:{c_e}'><b>ENFORCE</b>&thinsp;{enforce_n}</span>"
+        f"&ensp;<span style='color:{c_o}'><b>OFF</b>&thinsp;{off_n}</span>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+    with st.expander("Gate details", expanded=False):
+        def _rows(gates: list) -> str:
+            return "".join(
+                f"<div style='display:flex;font-size:var(--font-sm,0.72rem);padding:2px 0'>"
+                f"<span style='flex:3;color:#cdd6f4'>{html.escape(_GATE_LABEL.get(n, n))}</span>"
+                f"<span style='flex:1;color:{_MODE_COLOR.get(gate_modes.get(n,'AUDIT'),'#888')}'>"
+                f"{gate_modes.get(n, 'AUDIT')}</span></div>"
+                for n, _ in gates
+            )
+
+        hdr = (
+            "<span style='display:block;font-size:0.63rem;color:#555566;"
+            "font-weight:700;letter-spacing:0.08em;margin-bottom:2px'>"
+        )
+        st.markdown(
+            "<div style='display:flex;gap:24px'>"
+            f"<div style='flex:1'>{hdr}INPUT</span>"
+            + _rows(pipeline.input_gates)
+            + "</div>"
+            f"<div style='flex:1'>{hdr}OUTPUT</span>"
+            + _rows(pipeline.output_gates)
+            + "</div></div>",
+            unsafe_allow_html=True,
+        )
 
 
 def _build_messages(current_text: str | None = None) -> list[dict]:

@@ -142,6 +142,10 @@ def _init_session_state(config: dict) -> None:
         # Session start timestamp — used by Session Stats section in the panel.
         # Set once on first page load; never overwritten.
         "session_start_ts": time.time(),
+
+        # Threat injection pre-fill — set by the Inject button; read and cleared
+        # by _render_chat_content to show the editable text-area staging row.
+        "inject_prompt": "",
     }
 
     for key, value in defaults.items():

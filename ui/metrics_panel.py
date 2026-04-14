@@ -40,6 +40,7 @@ import streamlit as st
 _C_GREEN  = "#9ECE6A"
 _C_BLUE   = "#7AA2F7"
 _C_AMBER  = "#E0AF68"
+_C_ERROR  = "#FF9E64"   # system error — distinct from AUDIT amber
 _C_RED    = "#F7768E"
 _C_PURPLE = "#BB9AF7"
 _C_DIM    = "#555566"
@@ -50,7 +51,7 @@ _VERDICT_COLORS = {
     "PASS":  _C_GREEN,
     "BLOCK": _C_RED,
     "AUDIT": _C_AMBER,
-    "ERROR": _C_AMBER,
+    "ERROR": _C_ERROR,   # orange, not amber — distinct from AUDIT
     "SKIP":  _C_DIM,
 }
 
@@ -166,6 +167,17 @@ def _spark_char(pct: float) -> str:
 
 # ── Section renderers ─────────────────────────────────────────────────────────
 
+# Friendly names used in the threat gauge context line
+_GATE_DISPLAY_THREAT: dict[str, str] = {
+    "classify":    "Injection",
+    "toxicity_in": "Toxicity",
+    "bias_out":    "Bias",
+    "relevance":   "Relevance",
+    "mod_llm":     "Llama Guard",
+    "fast_scan":   "PII/Secrets",
+}
+
+
 def _render_threat_gauge(metrics: list[dict]) -> None:
     """Composite risk gauge — max score across all security-relevant gates."""
     _SCORED = {"classify", "toxicity_in", "bias_out"}
@@ -202,101 +214,207 @@ def _render_threat_gauge(metrics: list[dict]) -> None:
     )
     _mini_bar(threat, color, height=6, margin="0 0 2px 0")
 
+    # Threat context: top 1-2 contributing gates by contribution score
+    _CONTRIB_MAP = [
+        ("classify",    False),
+        ("toxicity_in", False),
+        ("bias_out",    False),
+        ("relevance",   True),   # inverted: low relevance = threat
+        ("mod_llm",     False),  # binary: 1.0 if BLOCK
+        ("fast_scan",   False),  # binary: 1.0 if BLOCK
+    ]
+    contributions: list[tuple[str, float]] = []
+    for _gate_name, _inverted in _CONTRIB_MAP:
+        _entry = next((x for x in metrics if x.get("gate_name") == _gate_name), None)
+        if _entry is None or _entry.get("verdict") in ("SKIP", "OFF"):
+            continue
+        _raw     = float(_entry.get("score", 0.0))
+        _verdict = _entry.get("verdict", "PASS")
+        if _gate_name in ("mod_llm", "fast_scan"):
+            _contrib = 1.0 if _verdict == "BLOCK" else 0.0
+        elif _inverted:
+            _contrib = max(0.0, 1.0 - _raw)
+        else:
+            _contrib = _raw
+        if _contrib >= 0.05:
+            contributions.append((_GATE_DISPLAY_THREAT.get(_gate_name, _gate_name), _contrib))
 
-def _render_gate_latency(metrics: list[dict], gate_modes: dict) -> None:
-    """Per-gate latency rows: ms value coloured by speed, 'off' for disabled."""
-    _tel_section("GATE LATENCY")
+    contributions.sort(key=lambda x: x[1], reverse=True)
+    if contributions:
+        _parts = [f"{n} ({v:.2f})" for n, v in contributions[:2]]
+        st.markdown(
+            f"<div style='font-size:0.65rem;color:{_C_LABEL};margin-top:2px'>"
+            f"Driven by: {' + '.join(_parts)}</div>",
+            unsafe_allow_html=True,
+        )
+
+
+_GATE_DISPLAY: dict[str, str] = {
+    "custom_regex":   "Regex",
+    "token_limit":    "Token Limit",
+    "invisible_text": "Invisible",
+    "fast_scan":      "PII/Secrets",
+    "classify":       "Injection",
+    "toxicity_in":    "Toxicity",
+    "ban_topics":     "Ban Topics",
+    "mod_llm":        "Llama Guard",
+    "sensitive_out":  "PII Out",
+    "malicious_urls": "Bad URLs",
+    "no_refusal":     "Refusal",
+    "bias_out":       "Bias",
+    "relevance":      "Relevance",
+    "deanonymize":    "PII Restore",
+}
+
+# Gates that produce no continuous score — show "—" in the Score column
+_BINARY_GATES = frozenset({
+    "custom_regex", "token_limit", "invisible_text",
+    "malicious_urls", "no_refusal", "deanonymize",
+})
+
+# For relevance the raw score is "goodness", so threat contribution is inverted
+_INVERTED_GATES = frozenset({"relevance"})
+
+# Output-side gate keys — used to insert the LLM inference separator row
+_OUTPUT_GATE_KEYS = frozenset({
+    "sensitive_out", "malicious_urls", "no_refusal",
+    "bias_out", "relevance", "deanonymize",
+})
+
+
+def _render_gate_results(
+    metrics: list[dict],
+    gate_modes: dict,
+    generation_ms: float = 0.0,
+) -> None:
+    """Merged GATE RESULTS table: Gate | Mode | Score | Verdict | ms.
+
+    A centred LLM inference row separates input gates (above) from output
+    gates (below), and shows the model's actual generation latency.
+    ms values use comma separators for readability (e.g. 1,234).
+    """
+    if not metrics:
+        return
+
+    _MODE_BADGE = {
+        "ENFORCE": (_C_RED,    "ENF"),
+        "AUDIT":   (_C_AMBER,  "AUD"),
+        "OFF":     (_C_DIM,    "OFF"),
+    }
+
+    # Pre-build the LLM inference separator row (inserted before first output gate)
+    gen_ms_str = f"{generation_ms:,.0f}" if generation_ms > 0 else "—"
+    _LLM_ROW = (
+        f"<tr>"
+        f"<td colspan='5' style='"
+        f"padding:4px 6px 4px 0;"
+        f"border-top:1px solid #2a2a3a;"
+        f"border-bottom:1px solid #2a2a3a;"
+        f"background:rgba(122,162,247,0.07)'>"
+        f"<div style='display:flex;justify-content:space-between;align-items:center'>"
+        f"<span style='color:{_C_BLUE};font-size:0.65rem;font-weight:600;"
+        f"letter-spacing:0.04em'>⚡ LLM</span>"
+        f"<span style='color:{_C_BLUE};font-variant-numeric:tabular-nums;"
+        f"font-size:0.65rem;padding-right:4px'>{gen_ms_str} ms</span>"
+        f"</div>"
+        f"</td>"
+        f"</tr>"
+    )
+
+    # Pre-compute max active latency so all bars share the same scale
+    _max_lat = max(
+        (m.get("latency_ms", 0.0) for m in metrics
+         if m.get("verdict") != "SKIP"
+         and gate_modes.get(m.get("gate_name", ""), "AUDIT") != "OFF"),
+        default=1.0,
+    ) or 1.0   # guard against all-zero latencies
+
+    rows: list[str] = []
+    llm_row_inserted = False
+
     for m in metrics:
-        name    = m.get("gate_name", "?")
-        verdict = m.get("verdict", "?")
+        gate    = m.get("gate_name", "?")
+        verdict = m.get("verdict", "PASS")
         latency = m.get("latency_ms", 0.0)
-        mode    = gate_modes.get(name, "")
-        if mode == "OFF":
-            st.markdown(
-                f"<div style='display:flex;justify-content:space-between;"
-                f"font-size:0.72rem;color:{_C_DIM};margin:1px 0'>"
-                f"<span>{name}</span><span>off</span></div>",
-                unsafe_allow_html=True,
+        score   = float(m.get("score", 0.0))
+        mode    = gate_modes.get(gate, "AUDIT")
+
+        # Insert the LLM row the first time we hit an output gate
+        if gate in _OUTPUT_GATE_KEYS and not llm_row_inserted:
+            rows.append(_LLM_ROW)
+            llm_row_inserted = True
+
+        label   = _GATE_DISPLAY.get(gate, gate[:12])
+        v_color = _VERDICT_COLORS.get(verdict, _C_DIM)
+        m_color, m_abbr = _MODE_BADGE.get(mode, (_C_DIM, mode[:3]))
+
+        if mode == "OFF" or verdict == "SKIP":
+            score_str = "—"
+            v_color   = _C_DIM
+            # ms column: dash, no bar
+            ms_cell = (
+                f"<td style='color:{_C_DIM};padding:2px 6px 2px 4px;"
+                f"text-align:right'>—</td>"
             )
         else:
-            # Colour by speed: green <100ms, amber <1000ms, red >=1000ms
+            if gate in _BINARY_GATES:
+                score_str = "—"
+            elif gate in _INVERTED_GATES:
+                threat_score = max(0.0, 1.0 - score)
+                score_str    = f"{threat_score:.2f}"
+            else:
+                score_str = f"{score:.2f}" if score >= 0.005 else "—"
+
+            # ms column: stacked mini-bar + comma-formatted number
             lat_color = (
                 _C_GREEN if latency < 100
                 else _C_AMBER if latency < 1000
                 else _C_RED
             )
-            verdict_color = _VERDICT_COLORS.get(verdict, "#888")
-            # Use verdict color for BLOCK/ERROR, speed color otherwise
-            display_color = (
-                verdict_color
-                if verdict in ("BLOCK", "ERROR")
-                else lat_color
-            )
-            st.markdown(
-                f"<div style='display:flex;justify-content:space-between;"
-                f"font-size:0.72rem;margin:1px 0'>"
-                f"<span style='color:{_C_TEXT}'>{name}</span>"
-                f"<span style='color:{display_color};"
-                f"font-variant-numeric:tabular-nums'>"
-                f"{latency:.0f}ms</span></div>",
-                unsafe_allow_html=True,
+            bar_pct = min(int(latency / _max_lat * 100), 100)
+            ms_cell = (
+                f"<td style='padding:2px 6px 2px 4px;text-align:right;"
+                f"vertical-align:middle'>"
+                f"<div style='background:#2a2a3a;border-radius:1px;height:2px;"
+                f"overflow:hidden;margin-bottom:2px'>"
+                f"<div style='background:{lat_color};width:{bar_pct}%;height:100%'>"
+                f"</div></div>"
+                f"<span style='color:{lat_color};"
+                f"font-variant-numeric:tabular-nums'>{latency:,.0f}</span>"
+                f"</td>"
             )
 
-
-def _render_security_signals(metrics: list[dict]) -> None:
-    """Per-gate security scores with mini bars."""
-    # (gate_name, display_label, inverted, binary)
-    _SIGNAL_GATES = [
-        ("classify",    "Injection",  False, False),
-        ("toxicity_in", "Toxicity",   False, False),
-        ("relevance",   "Relevance",  True,  False),   # higher = better → inverted
-        ("bias_out",    "Bias",       False, False),
-        ("mod_llm",     "LG3",        False, True),    # binary verdict
-        ("fast_scan",   "PII/Secret", False, True),    # binary verdict
-    ]
-
-    visible = [
-        (label, m, inv, binary)
-        for gate_name, label, inv, binary in _SIGNAL_GATES
-        if (m := next(
-            (x for x in metrics if x.get("gate_name") == gate_name), None
-        )) is not None and m.get("verdict") != "SKIP"
-    ]
-
-    if not visible:
-        return
-
-    _tel_section("SECURITY SIGNALS")
-    for label, m, inverted, binary in visible:
-        verdict = m.get("verdict", "PASS")
-        score   = float(m.get("score", 0.0))
-
-        if binary:
-            flagged   = verdict == "BLOCK"
-            val_str   = "FLAGGED" if flagged else "safe"
-            color     = _C_RED if flagged else _C_GREEN
-            bar_width = 1.0 if flagged else 0.04
-        else:
-            display = max(0.0, 1.0 - score) if inverted else score
-            color   = _score_color(display)
-            val_str = f"{display:.2f}"
-            bar_width = display
-
-        arrow = " ↑" if inverted else ""
-        bar_w = max(min(int(bar_width * 100), 100), 0)
-
-        st.markdown(
-            f"<div style='font-size:0.72rem;margin:2px 0'>"
-            f"<div style='display:flex;justify-content:space-between'>"
-            f"<span style='color:{_C_LABEL}'>{label}{arrow}</span>"
-            f"<span style='color:{color};"
-            f"font-variant-numeric:tabular-nums'>{val_str}</span></div>"
-            f"<div style='background:#2a2a3a;border-radius:2px;height:3px;"
-            f"overflow:hidden;margin:1px 0'>"
-            f"<div style='background:{color};width:{bar_w}%;height:100%'>"
-            f"</div></div></div>",
-            unsafe_allow_html=True,
+        rows.append(
+            f"<tr>"
+            f"<td style='color:{_C_TEXT};padding:2px 4px 2px 0' title='{gate}'>{label}</td>"
+            f"<td style='color:{m_color};padding:2px 4px;font-size:0.65rem'>{m_abbr}</td>"
+            f"<td style='color:{_C_LABEL};padding:2px 4px;font-variant-numeric:tabular-nums;"
+            f"text-align:right'>{score_str}</td>"
+            f"<td style='background:{v_color}22;color:{v_color};padding:1px 5px;"
+            f"border-radius:3px;font-size:0.65rem;font-weight:600'>{verdict}</td>"
+            f"{ms_cell}"
+            f"</tr>"
         )
+
+    _tel_section("GATE RESULTS")
+    st.markdown(
+        f"<table style='width:100%;border-collapse:collapse;font-size:0.72rem'>"
+        f"<thead><tr>"
+        f"<th style='color:{_C_DIM};font-weight:500;text-align:left;padding:1px 4px 3px 0;"
+        f"border-bottom:1px solid #2a2a3a'>Gate</th>"
+        f"<th style='color:{_C_DIM};font-weight:500;padding:1px 4px 3px;"
+        f"border-bottom:1px solid #2a2a3a'>Mode</th>"
+        f"<th style='color:{_C_DIM};font-weight:500;text-align:right;padding:1px 4px 3px;"
+        f"border-bottom:1px solid #2a2a3a'>Score</th>"
+        f"<th style='color:{_C_DIM};font-weight:500;padding:1px 4px 3px;"
+        f"border-bottom:1px solid #2a2a3a'>Verdict</th>"
+        f"<th style='color:{_C_DIM};font-weight:500;text-align:right;padding:1px 6px 3px 4px;"
+        f"border-bottom:1px solid #2a2a3a'>ms</th>"
+        f"</tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody>"
+        f"</table>",
+        unsafe_allow_html=True,
+    )
 
 
 def _render_pipeline_section(metrics: list[dict], generation_ms: float) -> None:
@@ -593,27 +711,39 @@ def render_telemetry_panel(ollama_host: str, model_name: str) -> None:
             st.caption("Waiting for first generation…")
             return
 
+        expand_all = st.toggle(
+            "Expand all", value=False, key="tel_expand_all",
+            help="Expand all collapsible telemetry sections",
+        )
+
+        # ── Always visible ────────────────────────────────────────────────────
         _render_threat_gauge(metrics)
         _tel_divider()
-        _render_gate_latency(metrics, gate_modes)
-        _tel_divider()
-        _render_security_signals(metrics)
-        _tel_divider()
-        _render_pipeline_section(metrics, tel.get("generation_ms", 0.0))
+        _render_gate_results(metrics, gate_modes, tel.get("generation_ms", 0.0))
         _tel_divider()
         _render_session_stats_section()
+
+        # ── Collapsible sections ──────────────────────────────────────────────
         _tel_divider()
-        _render_tokens_section(tel)
-        _tel_divider()
-        _render_ollama_timing_section(tel)
-        _tel_divider()
-        _render_context_trend(model_name, ollama_host)
-        _tel_divider()
-        _render_model_info_section(
-            model_name, ollama_host, tel.get("prompt_tokens", 0)
-        )
-        _tel_divider()
-        _render_memory_section(ollama_host)
+        with st.expander("Pipeline", expanded=expand_all):
+            _render_pipeline_section(metrics, tel.get("generation_ms", 0.0))
+
+        with st.expander("Tokens", expanded=expand_all):
+            _render_tokens_section(tel)
+
+        with st.expander("Ollama Timing", expanded=expand_all):
+            _render_ollama_timing_section(tel)
+
+        with st.expander("Context Trend", expanded=expand_all):
+            _render_context_trend(model_name, ollama_host)
+
+        with st.expander("Model Info", expanded=expand_all):
+            _render_model_info_section(
+                model_name, ollama_host, tel.get("prompt_tokens", 0)
+            )
+
+        with st.expander("Memory", expanded=expand_all):
+            _render_memory_section(ollama_host)
 
 
 # ── 1. API Inspector ──────────────────────────────────────────────────────────
@@ -709,12 +839,19 @@ def render_api_inspector(
     metrics: list[dict],
     *,
     idx: int | None = None,
+    expanded: bool = False,
 ) -> None:
     """Collapsible expander with one tab per gate — request/response JSON side by side.
 
-    Tab labels are prefixed with a verdict emoji (🟢 PASS / 🔴 BLOCK / 🟠 ERROR / ⚫ SKIP).
+    Tab labels: verdict emoji + short gate name + latency + score
+    (e.g. "🔴 Bias · 178ms · 0.46").  Binary gates omit the score field.
     Export buttons in the header row produce a full-session JSON or Markdown download
     that includes the conversation, telemetry, gate metrics, and raw gate traces.
+
+    Parameters
+    ----------
+    expanded:
+        When True the expander starts open (use for the most-recent turn).
     """
     if not raw_traces:
         return
@@ -731,12 +868,12 @@ def render_api_inspector(
         if name not in seen:
             ordered_names.append(name)
 
-    # Build a verdict lookup for tab labelling
-    verdict_map: dict[str, str] = {
-        m.get("gate_name", ""): m.get("verdict", "") for m in metrics
+    # Full metric lookup for tab labelling
+    metric_map: dict[str, dict] = {
+        m.get("gate_name", ""): m for m in metrics
     }
 
-    with st.expander("🔍 API Inspector — raw gate traces", expanded=False):
+    with st.expander("🔍 Pipeline Trace", expanded=expanded):
 
         # ── Export row ────────────────────────────────────────────────────────
         import datetime
@@ -778,11 +915,21 @@ def render_api_inspector(
         )
 
         # ── Gate tabs ─────────────────────────────────────────────────────────
-        # Tab label = verdict emoji + short gate name
-        tab_labels = [
-            f"{_VERDICT_EMOJI.get(verdict_map.get(n, ''), '⬜')} {n}"
-            for n in ordered_names
-        ]
+        # Tab label: emoji + short name + latency + score (binary gates skip score)
+        def _tab_label(gate_name: str) -> str:
+            m       = metric_map.get(gate_name, {})
+            verdict = m.get("verdict", "")
+            emoji   = _VERDICT_EMOJI.get(verdict, "⬜")
+            short   = _GATE_DISPLAY.get(gate_name, gate_name[:12])
+            latency = m.get("latency_ms", 0.0)
+            score   = float(m.get("score", 0.0))
+            if verdict in ("SKIP", "OFF") or not m:
+                return f"{emoji} {short}"
+            if gate_name in _BINARY_GATES:
+                return f"{emoji} {short} · {latency:.0f}ms"
+            return f"{emoji} {short} · {latency:.0f}ms · {score:.2f}"
+
+        tab_labels = [_tab_label(n) for n in ordered_names]
         tabs = st.tabs(tab_labels)
 
         for tab, gate_name in zip(tabs, ordered_names):
