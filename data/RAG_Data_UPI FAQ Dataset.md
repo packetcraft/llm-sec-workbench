@@ -1,7 +1,5 @@
 # **Comprehensive Unified Payments Interface (UPI) FAQ Dataset**
 
-## **1\
-## ---
 
 **2\. Registration, VPA Management, and Core Capabilities**
 
