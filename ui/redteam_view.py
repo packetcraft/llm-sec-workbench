@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING
 
 import streamlit as st
 
-from ui.metrics_panel import render_gate_chip_trace
+from ui.metrics_panel import render_api_inspector, render_gate_chip_trace
 
 if TYPE_CHECKING:
     from core.pipeline import PipelineManager
@@ -113,10 +113,15 @@ def render(pipeline: "PipelineManager", config: dict) -> None:
         unsafe_allow_html=True,
     )
 
-    static_tab, dynamic_tab = st.tabs(["🎯 Static", "🤖 Dynamic (PAIR)"])
+    static_tab, batch_tab, dynamic_tab = st.tabs(
+        ["🎯 Static", "📋 Batch", "🤖 Dynamic (PAIR)"]
+    )
 
     with static_tab:
         _render_static(pipeline, config)
+
+    with batch_tab:
+        _render_batch(pipeline, config)
 
     with dynamic_tab:
         _render_dynamic(pipeline, config)
@@ -326,12 +331,16 @@ def _inject_css() -> None:
         .pair-judge-row {
             display: flex;
             align-items: baseline;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid #2a2a3a;
+            border-radius: 4px;
+            padding: 5px 10px;
             gap: 6px;
             font-size: 0.70rem;
             margin-top: 4px;
         }
-        .pair-judge-label { color: #555566; font-weight: 600; white-space: nowrap; }
-        .pair-judge-text  { color: #888888; font-style: italic; }
+        .pair-judge-label { color: #7AA2F7; font-weight: 700; white-space: nowrap; font-size: 0.70rem; margin-right: 6px; }
+        .pair-judge-text  { color: #888888; font-style: italic; font-size: 0.70rem; }
 
         /* ── Config panel ────────────────────────────────────────────── */
         .pair-config-panel {
@@ -340,6 +349,95 @@ def _inject_css() -> None:
             border-radius: 8px;
             padding: 14px 16px;
             margin-bottom: 14px;
+        }
+
+        /* ── Batch tab ───────────────────────────────────────────────── */
+        .batch-filter-panel {
+            background: rgba(255,255,255,0.025);
+            border: 1px solid #2a2a3a;
+            border-radius: 8px;
+            padding: 12px 16px;
+            margin-bottom: 12px;
+        }
+        .batch-sev-chip {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 0.68rem;
+            font-weight: 700;
+            cursor: default;
+            margin: 2px 4px 2px 0;
+            border: 1px solid transparent;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .batch-sev-active   { opacity: 1.0; }
+        .batch-sev-inactive { opacity: 0.35; }
+        .batch-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.72rem;
+            margin-top: 6px;
+        }
+        .batch-table th {
+            text-align: left;
+            font-size: 0.65rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: #555566;
+            border-bottom: 1px solid #2a2a3a;
+            padding: 4px 8px;
+        }
+        .batch-table td {
+            padding: 5px 8px;
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+            vertical-align: middle;
+            color: #cdd6f4;
+        }
+        .batch-table tr:hover td { background: rgba(255,255,255,0.03); }
+        .batch-result-blocked { color: #F7768E; font-weight: 700; }
+        .batch-result-passed  { color: #9ECE6A; font-weight: 700; }
+        .batch-outcome-tp  { color: #9ECE6A; }
+        .batch-outcome-tn  { color: #9ECE6A; }
+        .batch-outcome-fn  { color: #F7768E; font-weight: 700; }
+        .batch-outcome-fp  { color: #E0AF68; font-weight: 700; }
+        .batch-summary-bar {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+            flex-wrap: wrap;
+            padding: 10px 14px;
+            background: rgba(255,255,255,0.025);
+            border: 1px solid #2a2a3a;
+            border-radius: 6px;
+            font-size: 0.78rem;
+            margin: 10px 0 6px 0;
+        }
+        .batch-stat { font-weight: 700; }
+        .batch-gate-pill {
+            display: inline-block;
+            background: rgba(122,162,247,0.10);
+            border: 1px solid rgba(122,162,247,0.20);
+            border-radius: 10px;
+            padding: 2px 9px;
+            font-size: 0.65rem;
+            color: #7AA2F7;
+            margin: 2px 3px 2px 0;
+            font-weight: 600;
+        }
+        .batch-progress-bar-wrap {
+            background: #1a1a2e;
+            border-radius: 4px;
+            height: 6px;
+            margin: 6px 0 8px 0;
+            overflow: hidden;
+        }
+        .batch-progress-bar {
+            height: 6px;
+            border-radius: 4px;
+            background: linear-gradient(90deg, #7AA2F7, #9ECE6A);
+            transition: width 0.3s ease;
         }
         </style>
         """,
@@ -396,12 +494,15 @@ def _render_static(pipeline: "PipelineManager", config: dict) -> None:
             "<div class='rt-section-label'>Prompt</div>",
             unsafe_allow_html=True,
         )
+        # Key includes the selected label so Streamlit creates a fresh widget
+        # (and honours value=) whenever the threat dropdown changes.
+        # With a fixed key Streamlit ignores value= after the first render.
         st.text_area(
             "Prompt preview",
             value=example,
             height=110,
             disabled=True,
-            key="static_rt_preview",
+            key=f"static_rt_preview_{selected_label}",
             label_visibility="collapsed",
         )
 
@@ -433,10 +534,11 @@ def _render_static(pipeline: "PipelineManager", config: dict) -> None:
                 "raw_traces":      payload.raw_traces,   # full req/resp per gate
                 "is_blocked":      payload.is_blocked,
                 "block_reason":    payload.block_reason,
-                "output_text":     payload.output_text,
-                "prompt_tokens":   payload.prompt_tokens,
+                "output_text":       payload.output_text,
+                "prompt_tokens":     payload.prompt_tokens,
                 "completion_tokens": payload.completion_tokens,
-                "ran_at":          datetime.now(timezone.utc).isoformat(),
+                "llm_generation_ms": payload.generation_ms,
+                "ran_at":            datetime.now(timezone.utc).isoformat(),
             }
             st.rerun()
 
@@ -541,17 +643,6 @@ def _render_static_result(result: dict) -> None:
 
     st.markdown(verdict_html + match_html, unsafe_allow_html=True)
 
-    # ── Gate trace ────────────────────────────────────────────────────────────
-    st.markdown(
-        "<div class='rt-section-label'>Gate Trace</div>",
-        unsafe_allow_html=True,
-    )
-    render_gate_chip_trace(
-        result.get("gate_metrics", []),
-        gate_modes=st.session_state.gate_modes,
-        title="",
-    )
-
     # ── LLM response (only when not blocked) ─────────────────────────────────
     if not is_blocked and result.get("output_text"):
         import html as _html
@@ -570,6 +661,27 @@ def _render_static_result(result: dict) -> None:
             f"<div class='rt-response'>{response_safe}</div>",
             unsafe_allow_html=True,
         )
+
+    # ── Gate Trace + Pipeline Trace — single unified expander ────────────────
+    # Gate chip summary is always shown when opened.
+    # Raw API Traces live as a nested expander at the bottom — one click to
+    # see verdicts, a second click to drill into request/response JSON.
+    with st.expander("🔍 Gate Trace", expanded=False):
+        render_gate_chip_trace(
+            result.get("gate_metrics", []),
+            gate_modes=st.session_state.gate_modes,
+            title="",           # inline — outer expander provides the collapse
+            llm_model=st.session_state.get("target_model", ""),
+            llm_generation_ms=result.get("llm_generation_ms", 0.0),
+        )
+        if result.get("raw_traces"):
+            render_api_inspector(
+                result.get("raw_traces") or {},
+                result.get("gate_metrics", []),
+                title=None,          # inline — already inside Gate Trace expander
+                show_export=False,   # export lives in the Download section below
+                show_summary=False,  # gate chip table above already covers this
+            )
 
     # ── Download ──────────────────────────────────────────────────────────────
     st.markdown(
@@ -704,6 +816,720 @@ def _render_export(result: dict) -> None:
             mime="text/markdown",
             use_container_width=True,
             key=f"dl_md_static_{ts}",
+        )
+
+
+# ── Batch Static tab ──────────────────────────────────────────────────────────
+
+def _flat_threats(extra: list[dict] | None = None) -> list[dict]:
+    """Return all threats as a flat list, merging imported extras.
+
+    Each entry has all category-level fields merged in so filters and the
+    results table can operate on a single dict without nested lookups.
+    """
+    all_cats = list(_load_threats_data())
+    if extra:
+        all_cats = all_cats + extra
+    flat: list[dict] = []
+    for cat in all_cats:
+        for t in cat.get("threats", []):
+            flat.append({
+                "category":       cat.get("category", ""),
+                "categoryId":     cat.get("categoryId", ""),
+                **t,
+            })
+    return flat
+
+
+def _batch_run_generator(pipeline, gate_modes: dict, threats: list[dict], delay_ms: int):
+    """Generator — yields one result dict per threat, advancing the batch."""
+    import time as _time
+
+    for threat in threats:
+        if st.session_state.get("batch_stop"):
+            break
+
+        t0 = _time.perf_counter()
+        try:
+            payload = pipeline.execute(
+                user_text=threat.get("example", ""),
+                gate_modes=gate_modes,
+            )
+        except Exception as exc:  # noqa: BLE001
+            yield {
+                "threat":           threat,
+                "blocked":          False,
+                "blocked_by":       "",
+                "caught_detail":    f"pipeline error: {exc}",
+                "gate_metrics":     [],
+                "raw_traces":       {},
+                "outcome_match":    False,
+                "latency_s":        round(_time.perf_counter() - t0, 2),
+                "llm_generation_ms": 0.0,
+                "error":            str(exc),
+            }
+            continue
+
+        latency_s = round(_time.perf_counter() - t0, 2)
+
+        blocked_by    = ""
+        caught_detail = ""
+        if payload.is_blocked:
+            blocked_by = next(
+                (m["gate_name"] for m in payload.metrics if m.get("verdict") == "BLOCK"),
+                "unknown",
+            )
+            caught_detail = next(
+                (m.get("detail", "") for m in payload.metrics if m.get("verdict") == "BLOCK"),
+                "",
+            )
+
+        expected = threat.get("expectedVerdict", "block")
+        outcome_match = (
+            (payload.is_blocked     and expected == "block") or
+            (not payload.is_blocked and expected != "block")
+        )
+
+        yield {
+            "threat":           threat,
+            "blocked":          payload.is_blocked,
+            "blocked_by":       blocked_by,
+            "caught_detail":    caught_detail,
+            "gate_metrics":     payload.metrics,
+            "raw_traces":       payload.raw_traces,
+            "outcome_match":    outcome_match,
+            "latency_s":        latency_s,
+            "llm_generation_ms": payload.generation_ms,
+        }
+
+        if delay_ms > 0:
+            _time.sleep(delay_ms / 1000)
+
+
+def _render_batch(pipeline, config: dict) -> None:
+    """Batch Static Red Teaming tab.
+
+    Advance loop is at the BOTTOM so that the table renders with accumulated
+    results before the next pipeline call blocks.  Each rerun cycle:
+      1. Render filter panel + progress + summary + table (current results)
+      2. Call next(generator) — blocks for pipeline latency
+      3. Append result → st.rerun() → back to step 1 with one new row
+    """
+    import html as _html
+
+    # ── Build flat threat list (built-in + imported) ──────────────────────────
+    imported = st.session_state.get("batch_import_threats", [])
+    all_threats = _flat_threats(imported if imported else None)
+
+    # All unique severities and category IDs present
+    all_severities = ["critical", "high", "medium", "low"]
+    all_cats       = list({t["categoryId"]: t["category"] for t in all_threats}.items())
+    # {categoryId: category_name}
+
+    running = st.session_state.get("batch_running", False)
+
+    # ── Step 7b — Import panel ────────────────────────────────────────────────
+    with st.expander("⬆ Import External Threat Data", expanded=False):
+        st.caption(
+            "Upload a JSON file in the same schema as `data/threats.json` "
+            "(list of category objects, each with a `threats` array). "
+            "Threats are merged by `id` — duplicates are ignored."
+        )
+        uploaded = st.file_uploader(
+            "Threat JSON file",
+            type=["json"],
+            label_visibility="collapsed",
+            key="batch_import_uploader",
+        )
+        if uploaded is not None:
+            try:
+                raw = json.loads(uploaded.read().decode("utf-8"))
+                if isinstance(raw, list):
+                    # Merge: keep existing, add new by id
+                    existing_ids = {
+                        t.get("id")
+                        for cat in st.session_state.get("batch_import_threats", [])
+                        for t in cat.get("threats", [])
+                    }
+                    merged = list(st.session_state.get("batch_import_threats", []))
+                    added = 0
+                    for cat in raw:
+                        new_threats = [
+                            t for t in cat.get("threats", [])
+                            if t.get("id") not in existing_ids
+                        ]
+                        if new_threats:
+                            merged.append({**cat, "threats": new_threats})
+                            added += len(new_threats)
+                            existing_ids.update(t["id"] for t in new_threats)
+                    st.session_state["batch_import_threats"] = merged
+                    st.success(f"Imported {added} new threat(s).")
+                    st.rerun()
+                else:
+                    st.error("File must be a JSON array of category objects.")
+            except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                st.error(f"Could not parse file: {exc}")
+
+        if st.session_state.get("batch_import_threats"):
+            n = sum(
+                len(c.get("threats", []))
+                for c in st.session_state["batch_import_threats"]
+            )
+            col_a, col_b = st.columns([4, 1])
+            col_a.caption(f"{n} imported threat(s) active this session.")
+            if col_b.button("Clear imported", use_container_width=True):
+                st.session_state["batch_import_threats"] = []
+                st.rerun()
+
+    # ── Step 7c — Filter panel ────────────────────────────────────────────────
+    st.markdown("<div class='batch-filter-panel'>", unsafe_allow_html=True)
+
+    # Severity filter
+    active_sevs = set(st.session_state.get("batch_severity_filter", all_severities))
+    sev_counts  = {s: sum(1 for t in all_threats if t.get("severity") == s)
+                   for s in all_severities}
+    total_count = len(all_threats)
+
+    st.markdown(
+        "<div class='rt-section-label'>Severity</div>",
+        unsafe_allow_html=True,
+    )
+    sev_cols = st.columns(5)
+    sev_colors = {"critical": _C_RED, "high": _C_ORANGE, "medium": _C_AMBER, "low": _C_GREEN}
+
+    # "All" chip
+    all_active = len(active_sevs) == len(all_severities)
+    if sev_cols[0].button(
+        f"All  {total_count}",
+        key="batch_sev_all",
+        disabled=running,
+        type="primary" if all_active else "secondary",
+        use_container_width=True,
+    ):
+        st.session_state["batch_severity_filter"] = list(all_severities)
+        st.rerun()
+
+    for col, sev in zip(sev_cols[1:], all_severities):
+        is_on = sev in active_sevs
+        if col.button(
+            f"{sev.capitalize()}  {sev_counts[sev]}",
+            key=f"batch_sev_{sev}",
+            disabled=running,
+            type="primary" if is_on else "secondary",
+            use_container_width=True,
+        ):
+            new_sevs = set(active_sevs)
+            if is_on and len(new_sevs) > 1:
+                new_sevs.discard(sev)
+            else:
+                new_sevs.add(sev)
+            st.session_state["batch_severity_filter"] = list(new_sevs)
+            st.rerun()
+
+    # Category filter — counts respect active severity filter
+    st.markdown(
+        "<div class='rt-section-label' style='margin-top:10px'>Categories to include</div>",
+        unsafe_allow_html=True,
+    )
+
+    active_cats = st.session_state.get("batch_category_filter")  # None = all
+    tgl_col1, tgl_col2 = st.columns([1, 1])
+    if tgl_col1.button("All", key="batch_cat_all", disabled=running, use_container_width=True):
+        st.session_state["batch_category_filter"] = None
+        # Must also overwrite each checkbox's widget-state key directly —
+        # Streamlit ignores value= once a key exists in session_state.
+        for cat_id, _ in all_cats:
+            st.session_state[f"batch_cat_{cat_id}"] = True
+        st.rerun()
+    if tgl_col2.button("None", key="batch_cat_none", disabled=running, use_container_width=True):
+        st.session_state["batch_category_filter"] = []
+        for cat_id, _ in all_cats:
+            st.session_state[f"batch_cat_{cat_id}"] = False
+        st.rerun()
+
+    # Two-column checkbox grid
+    cat_col1, cat_col2 = st.columns(2)
+    for idx, (cat_id, cat_name) in enumerate(all_cats):
+        # Count threats in this category that match active severity filter
+        total_in_cat    = sum(1 for t in all_threats
+                              if t["categoryId"] == cat_id)
+        selected_in_cat = sum(1 for t in all_threats
+                              if t["categoryId"] == cat_id
+                              and t.get("severity") in active_sevs)
+        checked = (active_cats is None) or (cat_id in (active_cats or []))
+        col = cat_col1 if idx % 2 == 0 else cat_col2
+        new_val = col.checkbox(
+            f"{cat_name}  ({selected_in_cat}/{total_in_cat})",
+            value=checked,
+            disabled=running,
+            key=f"batch_cat_{cat_id}",
+        )
+        if new_val != checked:
+            cur = set(active_cats) if active_cats is not None else {c for c, _ in all_cats}
+            if new_val:
+                cur.add(cat_id)
+            else:
+                cur.discard(cat_id)
+            # If all selected, revert to None (sentinel for "all")
+            st.session_state["batch_category_filter"] = (
+                None if cur == {c for c, _ in all_cats} else list(cur)
+            )
+            st.rerun()
+
+    # Delay slider
+    st.markdown(
+        "<div class='rt-section-label' style='margin-top:10px'>Delay between requests</div>",
+        unsafe_allow_html=True,
+    )
+    delay_ms = st.slider(
+        "Delay ms",
+        min_value=0, max_value=2000,
+        value=st.session_state.get("batch_delay_ms", 500),
+        step=100,
+        format="%d ms",
+        disabled=running,
+        label_visibility="collapsed",
+        key="batch_delay_slider",
+    )
+    st.session_state["batch_delay_ms"] = delay_ms
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # ── Build selected threat list from current filters ───────────────────────
+    selected_threats = [
+        t for t in all_threats
+        if t.get("severity") in active_sevs
+        and (active_cats is None or t["categoryId"] in (active_cats or []))
+    ]
+
+    # ── Run / Stop buttons ────────────────────────────────────────────────────
+    btn_l, btn_r = st.columns([3, 1])
+    with btn_l:
+        start = st.button(
+            f"▶ Run ({len(selected_threats)})",
+            use_container_width=True,
+            type="primary",
+            disabled=running or not selected_threats,
+            key="batch_run_btn",
+        )
+    with btn_r:
+        stop = st.button(
+            "■ Stop",
+            use_container_width=True,
+            disabled=not running,
+            key="batch_stop_btn",
+        )
+
+    if stop:
+        st.session_state["batch_stop"] = True
+
+    if start and selected_threats and not running:
+        st.session_state["batch_results"] = []
+        st.session_state["batch_running"] = True
+        st.session_state["batch_stop"]    = False
+        st.session_state["_batch_gen"] = _batch_run_generator(
+            pipeline,
+            dict(st.session_state.gate_modes),
+            selected_threats,
+            delay_ms,
+        )
+        st.rerun()
+
+    # ── Progress bar ──────────────────────────────────────────────────────────
+    batch_results = st.session_state.get("batch_results", [])
+    if running or batch_results:
+        done  = len(batch_results)
+        total = len(selected_threats) or 1
+        pct   = min(done / total, 1.0) * 100
+        label = f"Running… {done}/{total}" if running else f"Complete — {done} threat(s) tested"
+        st.markdown(
+            f"<div style='font-size:0.72rem;color:#7AA2F7;margin-top:6px'>{label}</div>"
+            f"<div class='batch-progress-bar-wrap'>"
+            f"<div class='batch-progress-bar' style='width:{pct:.1f}%'></div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+    # ── Step 7f — Summary bar ─────────────────────────────────────────────────
+    if batch_results:
+        _render_batch_summary(batch_results)
+
+    # ── Step 7e — Results table ───────────────────────────────────────────────
+    if batch_results:
+        _render_batch_table(batch_results)
+
+    # ── Step 7g — Export ─────────────────────────────────────────────────────
+    if batch_results and not running:
+        st.divider()
+        _render_batch_export(batch_results, {
+            "severity_filter":  list(active_sevs),
+            "category_filter":  active_cats,
+            "delay_ms":         delay_ms,
+            "gate_modes":       dict(st.session_state.gate_modes),
+        })
+
+    # ── Advance loop — MUST be last so the table renders before blocking ───────
+    # Each rerun: render everything above, then call next(gen) which blocks for
+    # pipeline latency, append the result, then rerun to show the new row.
+    if st.session_state.get("batch_running"):
+        gen = st.session_state.get("_batch_gen")
+        if gen is not None:
+            try:
+                result = next(gen)
+                st.session_state["batch_results"].append(result)
+            except StopIteration:
+                st.session_state["batch_running"] = False
+                st.session_state.pop("_batch_gen", None)
+        else:
+            st.session_state["batch_running"] = False
+        st.rerun()
+
+
+# ── Batch helper — summary bar (Step 7f) ─────────────────────────────────────
+
+def _render_batch_summary(results: list[dict]) -> None:
+    """Render summary counts, outcome accuracy sentence, and gate catch pills."""
+    import html as _html
+
+    n_blocked = sum(1 for r in results if r.get("blocked"))
+    n_passed  = sum(1 for r in results if not r.get("blocked"))
+    n_match   = sum(1 for r in results if r.get("outcome_match"))
+    n_fn      = sum(1 for r in results
+                    if not r.get("blocked") and r["threat"].get("expectedVerdict") == "block")
+    n_fp      = sum(1 for r in results
+                    if r.get("blocked") and r["threat"].get("expectedVerdict") != "block")
+
+    if n_fn == 0 and n_fp == 0:
+        accuracy_html = (
+            "<span style='color:#9ECE6A;font-weight:700'>"
+            "✓ All expected outcomes matched</span>"
+        )
+    else:
+        parts = []
+        if n_fn:
+            parts.append(f"<span style='color:#F7768E;font-weight:700'>⚠ {n_fn} false negative(s)</span>")
+        if n_fp:
+            parts.append(f"<span style='color:#E0AF68;font-weight:700'>⚠ {n_fp} false positive(s)</span>")
+        accuracy_html = " &nbsp;·&nbsp; ".join(parts)
+
+    # Per-gate catch counts
+    gate_catch: dict[str, int] = {}
+    for r in results:
+        if r.get("blocked") and r.get("blocked_by"):
+            gate_catch[r["blocked_by"]] = gate_catch.get(r["blocked_by"], 0) + 1
+    gate_pills = "".join(
+        f"<span class='batch-gate-pill'>{_html.escape(g)}: {c}</span>"
+        for g, c in sorted(gate_catch.items(), key=lambda x: -x[1])
+    )
+
+    st.markdown(
+        f"<div class='batch-summary-bar'>"
+        f"<span class='batch-stat' style='color:#F7768E'>🔴 {n_blocked} blocked</span>"
+        f"<span class='batch-stat' style='color:#9ECE6A'>✅ {n_passed} passed</span>"
+        f"<span style='color:#555566'>|</span>"
+        f"{accuracy_html}"
+        f"</div>"
+        + (f"<div style='margin-bottom:8px'>{gate_pills}</div>" if gate_pills else ""),
+        unsafe_allow_html=True,
+    )
+
+
+# ── Batch helper — results table (Step 7e) ────────────────────────────────────
+
+_SEV_BADGE = {
+    "critical": f"<span style='color:{_C_RED};font-weight:700;font-size:0.65rem'>CRIT</span>",
+    "high":     f"<span style='color:{_C_ORANGE};font-weight:700;font-size:0.65rem'>HIGH</span>",
+    "medium":   f"<span style='color:{_C_AMBER};font-weight:700;font-size:0.65rem'>MED</span>",
+    "low":      f"<span style='color:{_C_GREEN};font-weight:700;font-size:0.65rem'>LOW</span>",
+}
+
+
+def _render_batch_table(results: list[dict]) -> None:
+    """Render the results as a styled HTML table with per-row API Trace expanders."""
+    import html as _html
+
+    header = (
+        "<table class='batch-table'>"
+        "<thead><tr>"
+        "<th>#</th><th>Category</th><th>Threat Type</th><th>Sev</th>"
+        "<th>Result</th><th>Caught By</th><th>Expected</th>"
+        "<th>Outcome</th><th>Detected</th><th>Latency</th>"
+        "</tr></thead><tbody>"
+    )
+
+    rows = ""
+    row_meta = []  # collect per-row metadata for expanders below
+    for i, r in enumerate(results, 1):
+        t          = r["threat"]
+        sev        = t.get("severity", "")
+        blocked    = r.get("blocked", False)
+        expected   = t.get("expectedVerdict", "block")
+
+        sev_badge  = _SEV_BADGE.get(sev, _html.escape(sev))
+        result_td  = (
+            "<span class='batch-result-blocked'>🔴 Blocked</span>"
+            if blocked else
+            "<span class='batch-result-passed'>✅ Passed</span>"
+        )
+        caught_td  = _html.escape(r.get("blocked_by", "—") or "—")
+        detected   = _html.escape((r.get("caught_detail") or "—")[:60])
+
+        # Outcome classification
+        if expected == "block" and blocked:
+            outcome_td = "<span class='batch-outcome-tp' title='True positive'>✅ TP</span>"
+        elif expected == "block" and not blocked:
+            outcome_td = "<span class='batch-outcome-fn' title='False negative — pipeline miss'>❌ FN</span>"
+        elif expected != "block" and not blocked:
+            outcome_td = "<span class='batch-outcome-tn' title='True negative'>✅ TN</span>"
+        else:
+            outcome_td = "<span class='batch-outcome-fp' title='False positive — over-blocking'>⚠️ FP</span>"
+
+        rows += (
+            f"<tr>"
+            f"<td style='color:#555566'>{i}</td>"
+            f"<td>{_html.escape(t.get('category', ''))}</td>"
+            f"<td>{_html.escape(t.get('type', ''))}</td>"
+            f"<td>{sev_badge}</td>"
+            f"<td>{result_td}</td>"
+            f"<td style='color:#7AA2F7'>{caught_td}</td>"
+            f"<td style='color:#555566'>{_html.escape(expected)}</td>"
+            f"<td>{outcome_td}</td>"
+            f"<td style='color:#888888;font-size:0.68rem'>{detected}</td>"
+            f"<td style='color:#555566'>{r.get('latency_s', 0):.2f}s</td>"
+            f"</tr>"
+        )
+        row_meta.append((i, r))
+
+    st.markdown(header + rows + "</tbody></table>", unsafe_allow_html=True)
+
+    # ── Per-row Gate Trace expanders (cannot live inside HTML strings) ────────
+    if row_meta:
+        st.markdown(
+            "<div style='margin-top:0.8rem;font-size:0.72rem;color:#555566;'>"
+            "▼ Click a row below to inspect the full gate trace for that threat</div>",
+            unsafe_allow_html=True,
+        )
+    for i, r in row_meta:
+        t           = r["threat"]
+        blocked     = r.get("blocked", False)
+        gate_metrics = r.get("gate_metrics", [])
+        raw_traces  = r.get("raw_traces", {})
+        icon        = "🔴" if blocked else "✅"
+        label       = (
+            f"#{i} {icon} {t.get('type', '?')} "
+            f"[{t.get('category', '')}] — "
+            f"{'Blocked by ' + (r.get('blocked_by') or '?') if blocked else 'Passed'} "
+            f"({r.get('latency_s', 0):.2f}s)"
+        )
+        with st.expander(label, expanded=False):
+            # Prompt
+            st.markdown(
+                f"**Prompt:** `{t.get('example', '')[:200]}`"
+                + ("…" if len(t.get("example", "")) > 200 else "")
+            )
+            st.divider()
+
+            # Gate Trace — chip table + nested Raw API Traces (same as Static tab)
+            render_gate_chip_trace(
+                gate_metrics,
+                gate_modes=st.session_state.gate_modes,
+                title="",           # inline — outer expander provides the collapse
+                llm_model=st.session_state.get("target_model", ""),
+                llm_generation_ms=r.get("llm_generation_ms", 0.0),
+            )
+            if raw_traces:
+                render_api_inspector(
+                    raw_traces,
+                    gate_metrics,
+                    title=None,          # already inside an expander
+                    show_export=False,
+                    show_summary=False,  # chip table above already covers summary
+                )
+            else:
+                st.caption("No LLM API traces for this threat (zero-ML gates only).")
+
+
+# ── Batch helper — export (Step 7g) ──────────────────────────────────────────
+
+def _render_batch_export(results: list[dict], run_config: dict) -> None:
+    """JSON + Markdown export for a completed batch run."""
+    ts       = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+    exported = datetime.now(timezone.utc).isoformat()
+
+    n_blocked = sum(1 for r in results if r.get("blocked"))
+    n_passed  = sum(1 for r in results if not r.get("blocked"))
+    n_fn      = sum(1 for r in results
+                    if not r.get("blocked") and r["threat"].get("expectedVerdict") == "block")
+    n_fp      = sum(1 for r in results
+                    if r.get("blocked") and r["threat"].get("expectedVerdict") != "block")
+
+    gate_catch: dict[str, int] = {}
+    for r in results:
+        if r.get("blocked") and r.get("blocked_by"):
+            gate_catch[r["blocked_by"]] = gate_catch.get(r["blocked_by"], 0) + 1
+
+    # ── JSON ─────────────────────────────────────────────────────────────────
+    export_rows = []
+    for r in results:
+        t = r["threat"]
+        gate_pipeline = []
+        for m in r.get("gate_metrics", []):
+            name  = m.get("gate_name", "?")
+            trace = r.get("raw_traces", {}).get(name, {})
+            gate_pipeline.append({
+                "gate_name":  name,
+                "mode":       run_config.get("gate_modes", {}).get(name, "AUDIT"),
+                "verdict":    m.get("verdict", ""),
+                "latency_ms": m.get("latency_ms", 0.0),
+                "score":      m.get("score", 0.0),
+                "detail":     m.get("detail", ""),
+                "request":    trace.get("request", {}),
+                "response":   trace.get("response", {}),
+            })
+        export_rows.append({
+            "id":               t.get("id"),
+            "category":         t.get("category"),
+            "type":             t.get("type"),
+            "severity":         t.get("severity"),
+            "expected_verdict": t.get("expectedVerdict"),
+            "prompt":           t.get("example", ""),
+            "blocked":          r.get("blocked"),
+            "blocked_by":       r.get("blocked_by", ""),
+            "caught_detail":    r.get("caught_detail", ""),
+            "outcome_match":    r.get("outcome_match"),
+            "latency_s":        r.get("latency_s"),
+            "gate_pipeline":    gate_pipeline,
+        })
+
+    payload = {
+        "exported": exported,
+        "tool":     "LLM Security Workbench — Batch Static Red Teaming",
+        "config":   run_config,
+        "summary": {
+            "total":            len(results),
+            "blocked":          n_blocked,
+            "passed":           n_passed,
+            "false_negatives":  n_fn,
+            "false_positives":  n_fp,
+            "outcome_accuracy": f"{(len(results)-n_fn-n_fp)/max(len(results),1)*100:.1f}%",
+        },
+        "gate_catch_counts": gate_catch,
+        "results": export_rows,
+    }
+    json_bytes = json.dumps(payload, indent=2, default=str).encode()
+
+    # ── Markdown ──────────────────────────────────────────────────────────────
+    verdict_str = "✓ All expected outcomes matched" if (n_fn == 0 and n_fp == 0) else (
+        f"⚠ {n_fn} false negative(s), {n_fp} false positive(s)"
+    )
+    gate_lines = "\n".join(f"| {g} | {c} |" for g, c in sorted(gate_catch.items(), key=lambda x: -x[1]))
+
+    md = (
+        f"# Batch Static Red Team Report\n\n"
+        f"**Exported:** {exported}  \n"
+        f"**Tool:** LLM Security Workbench — Batch Static Red Teaming\n\n"
+        f"---\n\n"
+        f"## Summary\n\n"
+        f"| Metric | Value |\n|---|---|\n"
+        f"| Total threats tested | {len(results)} |\n"
+        f"| Blocked | {n_blocked} |\n"
+        f"| Passed | {n_passed} |\n"
+        f"| False negatives (pipeline miss) | {n_fn} |\n"
+        f"| False positives (over-blocking) | {n_fp} |\n"
+        f"| Outcome accuracy | {(len(results)-n_fn-n_fp)/max(len(results),1)*100:.1f}% |\n\n"
+        f"**Verdict:** {verdict_str}\n\n"
+        f"### Gate Catch Counts\n\n"
+        f"| Gate | Threats Caught |\n|---|---|\n"
+        f"{gate_lines}\n\n"
+        f"---\n\n"
+        f"## Results\n\n"
+        f"| # | Category | Type | Sev | Result | Caught By | Expected | Outcome | Latency |\n"
+        f"|---|---|---|---|---|---|---|---|---|\n"
+    )
+    for i, r in enumerate(results, 1):
+        t       = r["threat"]
+        blocked = r.get("blocked")
+        exp     = t.get("expectedVerdict", "block")
+        if exp == "block" and blocked:
+            outcome = "✅ TP"
+        elif exp == "block" and not blocked:
+            outcome = "❌ FN"
+        elif exp != "block" and not blocked:
+            outcome = "✅ TN"
+        else:
+            outcome = "⚠️ FP"
+        md += (
+            f"| {i} | {t.get('category','')} | {t.get('type','')} "
+            f"| {t.get('severity','')} "
+            f"| {'Blocked' if blocked else 'Passed'} "
+            f"| {r.get('blocked_by','—') or '—'} "
+            f"| {exp} | {outcome} | {r.get('latency_s',0):.2f}s |\n"
+        )
+
+    md += "\n---\n\n## Gate Traces\n\n"
+    for i, r in enumerate(results, 1):
+        t = r["threat"]
+        md += f"### {i}. {t.get('category','')} — {t.get('type','')}\n\n"
+        md += f"**Prompt:** `{t.get('example','')}`\n\n"
+        gm = r.get("gate_metrics", [])
+        raw_traces = r.get("raw_traces", {})
+        if gm:
+            md += (
+                "| Gate | Mode | Verdict | Latency (ms) | Score | Detail |\n"
+                "|---|---|---|---|---|---|\n"
+            )
+            for m in gm:
+                name = m.get("gate_name", "?")
+                md += (
+                    f"| {name} "
+                    f"| {run_config.get('gate_modes',{}).get(name,'AUDIT')} "
+                    f"| {m.get('verdict','')} "
+                    f"| {m.get('latency_ms',0.0):.1f} "
+                    f"| {m.get('score',0.0):.3f} "
+                    f"| {m.get('detail','')} |\n"
+                )
+            md += "\n"
+        if raw_traces:
+            md += "#### LLM API Traces\n\n"
+            for gate_name, trace in raw_traces.items():
+                verdict_tag = ""
+                for m in gm:
+                    if m.get("gate_name") == gate_name:
+                        verdict_tag = f" · {m.get('verdict','')} · {m.get('latency_ms',0.0):.0f}ms"
+                        break
+                md += f"##### Gate: `{gate_name}`{verdict_tag}\n\n"
+                req = trace.get("request")
+                res = trace.get("response")
+                if req:
+                    md += "**Request:**\n```json\n"
+                    md += json.dumps(req, indent=2, default=str)
+                    md += "\n```\n\n"
+                if res:
+                    md += "**Response:**\n```json\n"
+                    md += json.dumps(res, indent=2, default=str)
+                    md += "\n```\n\n"
+            md += "\n"
+
+    md_bytes = md.encode()
+
+    dl_l, dl_r = st.columns(2)
+    with dl_l:
+        st.download_button(
+            label="⬇ Export JSON",
+            data=json_bytes,
+            file_name=f"batch_rt_{ts}.json",
+            mime="application/json",
+            use_container_width=True,
+            key=f"batch_dl_json_{ts}",
+        )
+    with dl_r:
+        st.download_button(
+            label="⬇ Export Markdown",
+            data=md_bytes,
+            file_name=f"batch_rt_{ts}.md",
+            mime="text/markdown",
+            use_container_width=True,
+            key=f"batch_dl_md_{ts}",
         )
 
 
@@ -1125,61 +1951,49 @@ def _render_pair_attempt_card(attempt: dict, threshold: int) -> None:
         f"  {status_html}{score_html}{elapsed_html}"
         f"</div>"
         f"<div class='rt-section-label'>Attack Prompt</div>"
-        f"<div class='pair-prompt-box'>{prompt_safe}</div>"
-        f"<div class='rt-section-label' style='margin-top:6px'>Gate Trace</div>",
+        f"<div class='pair-prompt-box'>{prompt_safe}</div>",
         unsafe_allow_html=True,
     )
-
-    # Gate chips (Streamlit widget — rendered outside raw HTML block)
-    render_gate_chip_trace(gate_trace, gate_modes=st.session_state.gate_modes, title="")
 
     # ── Full LLM response + judge (untruncated) ───────────────────────────────
     if not blocked and attempt.get("response"):
         response_safe = _html.escape(attempt["response"])
         reasoning     = _html.escape(attempt.get("judge_reasoning", ""))
+        # Response — full width
         st.markdown(
             f"<div class='rt-section-label' style='margin-top:6px'>LLM Response</div>"
-            f"<div class='rt-response'>{response_safe}</div>"
-            + (
+            f"<div class='rt-response'>{response_safe}</div>",
+            unsafe_allow_html=True,
+        )
+        # Judge reasoning — full width, below the response
+        if reasoning:
+            st.markdown(
                 f"<div class='pair-judge-row'>"
                 f"<span class='pair-judge-label'>Judge reasoning:</span>"
                 f"<span class='pair-judge-text'>{reasoning}</span>"
-                f"</div>" if reasoning else ""
-            ),
-            unsafe_allow_html=True,
-        )
+                f"</div>",
+                unsafe_allow_html=True,
+            )
 
-    # ── API Traces expander ───────────────────────────────────────────────────
-    has_traces = bool(raw_traces)
-    with st.expander(
-        f"🔍 API Traces — Iteration {itr} "
-        f"({'no traces' if not has_traces else f'{len(raw_traces)} gate(s)'})",
-        expanded=False,
-    ):
-        if not has_traces:
-            st.caption("No raw traces captured for this iteration.")
-        else:
-            for m in gate_trace:
-                name  = m.get("gate_name", "?")
-                trace = raw_traces.get(name)
-                if not trace:
-                    continue
-                verdict = m.get("verdict", "")
-                latency = m.get("latency_ms", 0.0)
-                st.markdown(
-                    f"<div style='font-size:0.72rem;font-weight:700;color:#7AA2F7;"
-                    f"margin:8px 0 2px 0'>{name}"
-                    f"<span style='font-weight:400;color:#555566;margin-left:8px'>"
-                    f"{verdict} · {latency:.1f} ms</span></div>",
-                    unsafe_allow_html=True,
+    # ── Unified Gate Trace expander (chip table + Raw API Traces nested) ──────
+    # st.expander is a native Streamlit widget and ignores HTML div wrappers.
+    # Use a columns spacer to achieve the 144 px left indent instead.
+    _spacer, _gate_col = st.columns([144, 590])
+    with _gate_col:
+        with st.expander(f"🔍 Gate Trace — Iteration {itr}", expanded=False):
+            render_gate_chip_trace(
+                gate_trace,
+                gate_modes=st.session_state.gate_modes,
+                title="",   # inline — outer expander provides the collapse
+            )
+            if raw_traces:
+                render_api_inspector(
+                    raw_traces,
+                    gate_trace,
+                    title=None,          # inline inside the Gate Trace expander
+                    show_export=False,
+                    show_summary=False,  # chip table above already covers this
                 )
-                req_col, res_col = st.columns(2)
-                with req_col:
-                    st.caption("Request")
-                    st.json(trace.get("request", {}), expanded=False)
-                with res_col:
-                    st.caption("Response")
-                    st.json(trace.get("response", {}), expanded=False)
 
     # Close card div
     st.markdown("</div>", unsafe_allow_html=True)

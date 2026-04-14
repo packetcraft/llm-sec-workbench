@@ -157,6 +157,15 @@ def _init_session_state(config: dict) -> None:
         "pair_running": False,
         # Set True by the Stop button; checked by PAIRRunner.run() each iteration
         "pair_stop":   False,
+        # ── Batch Static Red Teaming (Step 7) ────────────────────────────────
+        "batch_results":         [],    # list of result dicts from current/last run
+        "batch_running":         False, # True while batch is executing
+        "batch_stop":            False, # Stop signal
+        "batch_severity_filter": ["critical", "high", "medium", "low"],
+        "batch_category_filter": None,  # None = all; else list of categoryId strings
+        "batch_import_threats":  [],    # threats loaded via Import button (session-only)
+        "batch_delay_ms":        500,   # delay between requests (ms)
+
         # Index into data/pair_goals.json for the preset dropdown.
         # None = not yet resolved; the view resolves it to the "Custom Goal…" entry.
         "pair_goal_preset_idx": None,
@@ -307,15 +316,25 @@ def main() -> None:
         st.markdown("## Navigation")
         page = st.radio(
             label="page",
-            options=["💬 Chat Workbench", "🛡️ Agentic Security", "⚔️ Red Teaming"],
+            options=[
+                "📖 How It Works",
+                "💬 Chat Workbench",
+                "🛡️ Agentic Security",
+                "⚔️ Red Teaming",
+            ],
             label_visibility="collapsed",
         )
         st.divider()
 
-    # ── Agentic Security — no pipeline or Ollama required ────────────────────
+    # ── Pages that don't need Ollama ──────────────────────────────────────────
     if page == "🛡️ Agentic Security":
         from ui.agentic_view import render as render_agentic
         render_agentic(config)
+        return
+
+    if page == "📖 How It Works":
+        from ui.howto_view import render as render_howto
+        render_howto()
         return
 
     # ── Ollama availability guard (shared by Chat Workbench + Red Teaming) ────

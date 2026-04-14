@@ -186,6 +186,22 @@ class PipelineManager:
         payload.prompt_tokens = result.prompt_tokens
         payload.completion_tokens = result.completion_tokens
         payload.tokens_per_second = result.tokens_per_second
+        payload.generation_ms = result.generation_ms
+
+        # Store the LLM request/response so it appears in Raw API Traces.
+        payload.raw_traces["__llm__"] = {
+            "request":  {"messages": messages},
+            "response": {
+                "output_text":       result.output_text,
+                "prompt_tokens":     result.prompt_tokens,
+                "completion_tokens": result.completion_tokens,
+                "tokens_per_second": round(result.tokens_per_second, 1),
+                "generation_ms":     round(result.generation_ms, 1),
+                "done_reason":       result.done_reason,
+            },
+            "_model":         getattr(self.client, "model", ""),
+            "_generation_ms": result.generation_ms,
+        }
 
         # ── Output gates ──────────────────────────────────────────────────────
         payload = self.run_output_gates(payload, gate_modes)

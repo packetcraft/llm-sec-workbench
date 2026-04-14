@@ -471,9 +471,11 @@ _MODE_COLORS  = {"OFF": "#555566", "AUDIT": "#E0AF68", "ENFORCE": "#F7768E"}
 
 
 def _gate_row(gate_key: str, label: str, default: str, help_text: str) -> str:
-    """Render a compact gate-mode row (label + selectbox) and return the chosen mode."""
+    """Render a compact gate-mode row (label + selectbox + ⓘ popover) and return the chosen mode."""
+    from ui.gate_info import GATE_INFO, METHOD_STYLES
+
     current = st.session_state.gate_modes.get(gate_key, default)
-    col_lbl, col_sel = st.columns([2, 3])
+    col_lbl, col_sel, col_info = st.columns([2, 3, 1])
     with col_lbl:
         color = _MODE_COLORS[current]
         st.markdown(
@@ -490,6 +492,27 @@ def _gate_row(gate_key: str, label: str, default: str, help_text: str) -> str:
             help=help_text,
             key=f"gate_sel_{gate_key}",
         )
+    with col_info:
+        info = GATE_INFO.get(gate_key)
+        if info:
+            with st.popover("ⓘ", use_container_width=True):
+                method_key = info["method"]
+                method_lbl, method_color = METHOD_STYLES.get(method_key, ("", "#888"))
+                st.markdown(
+                    f"**{info['label']}** &nbsp;·&nbsp; {info['category']} Gate",
+                    unsafe_allow_html=True,
+                )
+                st.markdown(
+                    f"<span style='background:{method_color}22;color:{method_color};"
+                    f"padding:2px 7px;border-radius:3px;font-size:0.70rem;"
+                    f"font-weight:700'>{method_lbl}</span>"
+                    f"&nbsp;&nbsp;"
+                    f"<span style='color:#555566;font-size:0.70rem'>⏱ {info['latency']}</span>",
+                    unsafe_allow_html=True,
+                )
+                st.markdown(info["description"])
+                st.caption(f"**BLOCK means:** {info['block_means']}")
+
     if new_mode != current:
         st.session_state.gate_modes[gate_key] = new_mode
         st.rerun()

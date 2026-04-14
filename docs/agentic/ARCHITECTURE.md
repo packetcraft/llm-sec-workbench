@@ -203,6 +203,63 @@ git_commit = subprocess.check_output(
 
 Both calls are wrapped in `try/except` — if the project is not a git repo, the fields are set to `null`.
 
+### 2.9 Guard Model — Selection Rationale
+
+**Default model: `qwen2.5:1.5b`**
+
+Defined in `hooks/agentic_guard.py` line 30:
+
+```python
+DEFAULT_GUARD_MODEL = "qwen2.5:1.5b"
+```
+
+Can be overridden in `config.yaml` without code changes:
+
+```yaml
+agentic:
+  guard_model: "qwen2.5:1.5b"
+```
+
+#### Why 1.5B parameters?
+
+The hook runs **synchronously in the critical path** of every Claude Code tool call. Every millisecond the hook spends waiting for the model is a millisecond the user waits before their command executes. The hard timeout is 5 000 ms — if the model doesn't respond in time, the hook fails open (exit 0) to avoid blocking the session.
+
+A 1.5B model is sufficient for the task: the classification prompt is rigidly structured, the output space is binary (ALLOW / BLOCK), and the tool inputs are short and concrete. Larger models add latency without meaningfully improving accuracy on this narrow, well-defined task.
+
+#### Generation constraints (why they matter)
+
+| Parameter | Value | Reason |
+|:----------|:------|:-------|
+| `temperature` | `0` | Fully deterministic — identical inputs always produce the same verdict |
+| `num_predict` | `60` | All the model needs to produce is one verdict line; capping tokens prevents runaway generation |
+| `num_ctx` | `2048` | Tool inputs are rarely long; compact context window reduces memory pressure |
+
+#### When the model IS and IS NOT called
+
+| Situation | Outcome | Model called? |
+|:----------|:--------|:-------------|
+| Bash command matches allowlist (e.g. `git log`, `ls`, `cat`) | `ALLOWLISTED` — logged, exits 0 | **No** |
+| Bash command fails shell-composition disqualifier (`\|`, `>`, `;`, `$(`) | Sent to guard model | **Yes** |
+| Any non-Bash PreToolUse (`Write`, `Edit`, `WebFetch`, MCP tools) | Sent to guard model | **Yes** |
+| PostToolUse — scanning tool output for exfiltration signals | Sent to guard model (audit only, cannot block) | **Yes** |
+| Ollama unreachable or timeout | `ERROR` verdict, exits 0 (fail-open) | Attempted, failed |
+
+The allowlist bypass (§2.3) is specifically designed to eliminate the latency hit on safe read-only commands that make up the majority of Claude Code's activity during normal development.
+
+#### Alternative models
+
+If the default model's accuracy is insufficient for your threat model, substitute a larger model in `config.yaml`. Trade-offs:
+
+| Model | Size | Latency (typical) | Notes |
+|:------|:-----|:-----------------|:------|
+| `qwen2.5:1.5b` | 1.5B | 200 – 800 ms | Default. Fast, low VRAM (~1 GB). |
+| `qwen2.5:3b` | 3B | 400 – 1 500 ms | Better reasoning on ambiguous tool inputs. |
+| `llama3.2:3b` | 3B | 400 – 1 500 ms | Strong instruction following; good BLOCK/ALLOW calibration. |
+| `phi3:mini` | 3.8B | 500 – 2 000 ms | Good accuracy, higher VRAM (~2.5 GB). |
+| `tinyllama` | 1.1B | 100 – 400 ms | Lowest latency, lowest accuracy — use only in low-risk environments. |
+
+Any model that can follow the strict two-option output format (`ALLOW - reason` / `BLOCK - reason`) is compatible. After changing the model, verify with a few test runs that it produces parseable output — models that ignore the format are treated as ALLOW by the fail-open parser.
+
 ---
 
 ## 3. JSONL Schema Reference

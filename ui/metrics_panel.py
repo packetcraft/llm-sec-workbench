@@ -19,15 +19,18 @@ render_telemetry_panel(ollama_host, model_name)
       MEMORY          — live fragment: VRAM/RAM bar, GPU temp, unloads countdown
 
 render_api_inspector(raw_traces, metrics)
-    Tabbed expander showing raw gate request/response JSON.
+    Flat-list gate inspector — gate name/verdict header + 2-col Request/Response st.json.
+    Shared by Chat Workbench, Static, PAIR, and Batch views.
+    title=None renders inline (no expander); show_export=False omits download buttons.
 
 render_context_bar(prompt_tokens, model_name, ollama_host)
     Inline context window utilisation bar (used in chat history replay).
 
-render_gate_chip_trace(gate_metrics, gate_modes, *, title)
-    Compact one-row-per-gate chip trace for red-team views.
-    Each chip: emoji + name | VERDICT badge | [mode] | detail | latency ms.
-    Shared by Static and Dynamic (PAIR) red-team tabs.
+render_gate_chip_trace(gate_metrics, gate_modes, *, title, expanded)
+    Compact one-row-per-gate chip trace. When title is set (default "🔍 Gate Trace")
+    wraps chips in a collapsible st.expander (collapsed by default).
+    Pass title="" to render chips inline without an expander (used by PAIR cards).
+    Shared by Static, PAIR, and Batch red-team views.
 """
 
 from __future__ import annotations
@@ -863,23 +866,37 @@ def render_api_inspector(
     *,
     idx: int | None = None,
     expanded: bool = False,
+    title: str | None = "🔍 Pipeline Trace",
+    show_export: bool = True,
+    show_summary: bool = True,
 ) -> None:
-    """Collapsible expander with one tab per gate — request/response JSON side by side.
+    """Flat-list gate inspector — gate name + verdict header then Request/Response JSON side by side.
 
-    Tab labels: verdict emoji + short gate name + latency + score
-    (e.g. "🔴 Bias · 178ms · 0.46").  Binary gates omit the score field.
-    Export buttons in the header row produce a full-session JSON or Markdown download
-    that includes the conversation, telemetry, gate metrics, and raw gate traces.
+    Each gate is shown as a labelled header row followed by a two-column
+    Request / Response ``st.json`` block.  This matches the PAIR iteration
+    card layout and is now used in all three views (Chat, Static, PAIR, Batch).
 
     Parameters
     ----------
+    title:
+        Expander title.  Pass ``None`` to render the body inline (no expander
+        wrapper) — useful when the caller already provides an expander context.
     expanded:
-        When True the expander starts open (use for the most-recent turn).
+        When True the expander starts open (only applies when *title* is set).
+    show_export:
+        When True (default) render JSON/Markdown download buttons at the top.
+        Set False for PAIR/Static/Batch where a separate export already exists.
+    show_summary:
+        When True (default) render the compact gate header cards above the Raw
+        API Traces expander.  Set False when the caller already renders a gate
+        summary (e.g. render_gate_chip_trace above) to avoid duplication.
     """
     if not raw_traces:
         return
 
-    # Build ordered gate list (pipeline order via metrics, then any extras)
+    # Build ordered gate list (pipeline order via metrics, then any extras).
+    # "__llm__" is not in metrics, so we insert it manually between the last
+    # input gate and the first output gate if present in raw_traces.
     ordered_names: list[str] = []
     seen: set[str] = set()
     for m in metrics:
@@ -887,107 +904,229 @@ def render_api_inspector(
         if name in raw_traces and name not in seen:
             ordered_names.append(name)
             seen.add(name)
+    if "__llm__" in raw_traces:
+        # Insert after the last non-output gate (i.e. before the first output gate)
+        insert_idx = len(ordered_names)
+        for i, n in enumerate(ordered_names):
+            if n in _OUTPUT_GATE_KEYS:
+                insert_idx = i
+                break
+        ordered_names.insert(insert_idx, "__llm__")
+        seen.add("__llm__")
     for name in raw_traces:
         if name not in seen:
             ordered_names.append(name)
 
-    # Full metric lookup for tab labelling
-    metric_map: dict[str, dict] = {
-        m.get("gate_name", ""): m for m in metrics
-    }
+    # Full metric lookup keyed by gate name
+    metric_map: dict[str, dict] = {m.get("gate_name", ""): m for m in metrics}
 
-    with st.expander("🔍 Pipeline Trace", expanded=expanded):
+    def _render_body() -> None:
+        import html as _html
 
-        # ── Export row ────────────────────────────────────────────────────────
-        import datetime
-        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        # Key must be stable and unique across all inspector instances on the page.
-        # Use the message index when provided; fall back to a hash of the trace keys.
-        key_id = (
-            str(idx)
-            if idx is not None
-            else str(abs(hash(tuple(sorted(raw_traces.keys())))))
-        )
-        json_bytes = _build_inspector_json(raw_traces, metrics).encode()
-        md_bytes   = _build_inspector_md(raw_traces, metrics).encode()
-
-        exp_left, exp_right, _ = st.columns([1, 1, 5])
-        with exp_left:
-            st.download_button(
-                label="⬇ JSON",
-                data=json_bytes,
-                file_name=f"workbench_trace_{ts}.json",
-                mime="application/json",
-                use_container_width=True,
-                key=f"dl_json_{key_id}",
+        if show_export:
+            import datetime as _dt
+            ts     = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+            key_id = (
+                str(idx)
+                if idx is not None
+                else str(abs(hash(tuple(sorted(raw_traces.keys())))))
             )
-        with exp_right:
-            st.download_button(
-                label="⬇ MD",
-                data=md_bytes,
-                file_name=f"workbench_trace_{ts}.md",
-                mime="text/markdown",
-                use_container_width=True,
-                key=f"dl_md_{key_id}",
-            )
-
-        st.markdown(
-            f"<div style='font-size:0.68rem;color:{_C_DIM};margin-bottom:6px'>"
-            f"Export includes full conversation, telemetry and gate traces.</div>",
-            unsafe_allow_html=True,
-        )
-
-        # ── Gate tabs ─────────────────────────────────────────────────────────
-        # Tab label: emoji + short name + latency + score (binary gates skip score)
-        def _tab_label(gate_name: str) -> str:
-            m       = metric_map.get(gate_name, {})
-            verdict = m.get("verdict", "")
-            emoji   = _VERDICT_EMOJI.get(verdict, "⬜")
-            short   = _GATE_DISPLAY.get(gate_name, gate_name[:12])
-            latency = m.get("latency_ms", 0.0)
-            score   = float(m.get("score", 0.0))
-            if verdict in ("SKIP", "OFF") or not m:
-                return f"{emoji} {short}"
-            if gate_name in _BINARY_GATES:
-                return f"{emoji} {short} · {latency:.0f}ms"
-            return f"{emoji} {short} · {latency:.0f}ms · {score:.2f}"
-
-        tab_labels = [_tab_label(n) for n in ordered_names]
-        tabs = st.tabs(tab_labels)
-
-        for tab, gate_name in zip(tabs, ordered_names):
-            with tab:
-                trace  = raw_traces[gate_name]
-                metric = next(
-                    (m for m in metrics if m.get("gate_name") == gate_name), None
+            json_bytes = _build_inspector_json(raw_traces, metrics).encode()
+            md_bytes   = _build_inspector_md(raw_traces, metrics).encode()
+            exp_left, exp_right, _ = st.columns([1, 1, 5])
+            with exp_left:
+                st.download_button(
+                    label="⬇ JSON",
+                    data=json_bytes,
+                    file_name=f"workbench_trace_{ts}.json",
+                    mime="application/json",
+                    use_container_width=True,
+                    key=f"dl_json_{key_id}",
                 )
-                col_req, col_resp = st.columns(2)
-                with col_req:
-                    st.caption("**Request**")
-                    st.code(json.dumps(trace.get("request", {}),
-                                       indent=2, default=str),
-                            language="json")
-                with col_resp:
-                    st.caption("**Response**")
-                    st.code(json.dumps(trace.get("response", {}),
-                                       indent=2, default=str),
-                            language="json")
-                if metric:
-                    verdict = metric.get("verdict", "?")
-                    latency = metric.get("latency_ms", 0.0)
-                    score   = metric.get("score", 0.0)
-                    detail  = metric.get("detail", "")
-                    color   = _VERDICT_COLORS.get(verdict, "#888888")
-                    emoji   = _VERDICT_EMOJI.get(verdict, "")
+            with exp_right:
+                st.download_button(
+                    label="⬇ MD",
+                    data=md_bytes,
+                    file_name=f"workbench_trace_{ts}.md",
+                    mime="text/markdown",
+                    use_container_width=True,
+                    key=f"dl_md_{key_id}",
+                )
+            st.markdown(
+                f"<div style='font-size:0.68rem;color:{_C_DIM};margin-bottom:6px'>"
+                f"Export includes full conversation, telemetry and gate traces.</div>",
+                unsafe_allow_html=True,
+            )
+
+        # ── Phase 1: header summary cards (skipped when caller owns summary) ──
+        # One compact card per gate — verdict, latency, score, detail.
+        # No JSON here; raw traces are in the single expander below (Phase 2).
+        header_cards: list[str] = [] if show_summary else None  # type: ignore[assignment]
+        for gate_name in (ordered_names if show_summary else []):
+            metric  = metric_map.get(gate_name)
+            verdict = metric.get("verdict", "") if metric else ""
+            latency = metric.get("latency_ms", 0.0) if metric else 0.0
+            score   = float(metric.get("score", 0.0)) if metric else 0.0
+            detail  = (metric.get("detail", "") or "") if metric else ""
+
+            emoji    = _GATE_EMOJI.get(gate_name, "●")
+            label    = _GATE_DISPLAY.get(gate_name, gate_name[:14])
+            v_color  = _VERDICT_COLORS.get(verdict, _C_DIM)
+            lat_color = (
+                _C_GREEN if latency < 100
+                else _C_AMBER if latency < 1000
+                else _C_RED
+            )
+            lat_str  = f"{latency:,.0f} ms" if latency > 0 else "—"
+            score_str = (
+                "" if gate_name in _BINARY_GATES or verdict in ("SKIP", "OFF")
+                else f"&nbsp;·&nbsp;<span style='color:{_C_LABEL}'>{score:.3f}</span>"
+            )
+            detail_safe  = _html.escape(detail[:90]) if detail else ""
+            detail_title = _html.escape(detail) if detail else ""
+            detail_cell  = (
+                f"<span style='color:{_C_LABEL};flex:1;font-size:0.63rem;"
+                f"overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+                f"padding-left:8px' title='{detail_title}'>{detail_safe}</span>"
+                if detail_safe else
+                "<span style='flex:1'></span>"
+            )
+            header_cards.append(
+                f"<div style='display:flex;align-items:center;gap:6px;"
+                f"padding:5px 8px;border-radius:4px;"
+                f"background:rgba(255,255,255,0.04);"
+                f"border:1px solid #2a2a3a;"
+                f"font-size:0.70rem;font-family:ui-monospace,monospace;"
+                f"margin-bottom:3px'>"
+                f"<span style='font-weight:600;min-width:110px;color:{_C_TEXT};"
+                f"white-space:nowrap'>{emoji}&nbsp;{label}</span>"
+                f"<span style='background:{v_color}22;color:{v_color};"
+                f"padding:1px 6px;border-radius:3px;font-size:0.63rem;"
+                f"font-weight:700;letter-spacing:0.04em;white-space:nowrap'>"
+                f"{verdict}</span>"
+                f"<span style='color:{lat_color};font-size:0.63rem;"
+                f"white-space:nowrap'>{lat_str}{score_str}</span>"
+                f"{detail_cell}"
+                f"</div>"
+            )
+
+        if show_summary and header_cards:
+            st.markdown(
+                f"<div style='margin:4px 0 8px 0'>{''.join(header_cards)}</div>",
+                unsafe_allow_html=True,
+            )
+
+        # ── Phase 2: single Raw API Traces expander (collapsed by default) ────
+        # Gates that produced request/response data are shown, plus the LLM
+        # inference entry (__llm__) if it was captured by pipeline.execute().
+        traced_names = [
+            n for n in ordered_names
+            if n == "__llm__" or (
+                raw_traces.get(n) and (
+                    raw_traces[n].get("request") or raw_traces[n].get("response")
+                )
+            )
+        ]
+        if traced_names:
+            n_llm   = 1 if "__llm__" in traced_names else 0
+            n_gates = len(traced_names) - n_llm
+            _parts: list[str] = []
+            if n_gates:
+                _parts.append(f"{n_gates} gate(s)")
+            if n_llm:
+                _parts.append("LLM")
+            with st.expander(
+                f"▶ Raw API Traces ({', '.join(_parts)})",
+                expanded=False,
+            ):
+                # Single column header row — shown once, not repeated per gate
+                col_hdr_l, col_hdr_r = st.columns(2)
+                col_hdr_l.markdown(
+                    f"<div style='font-size:0.60rem;color:{_C_DIM};"
+                    f"letter-spacing:0.06em;text-transform:uppercase;"
+                    f"border-bottom:1px solid #2a2a3a;padding-bottom:3px;"
+                    f"margin-bottom:4px'>Request</div>",
+                    unsafe_allow_html=True,
+                )
+                col_hdr_r.markdown(
+                    f"<div style='font-size:0.60rem;color:{_C_DIM};"
+                    f"letter-spacing:0.06em;text-transform:uppercase;"
+                    f"border-bottom:1px solid #2a2a3a;padding-bottom:3px;"
+                    f"margin-bottom:4px'>Response</div>",
+                    unsafe_allow_html=True,
+                )
+
+                for gate_name in traced_names:
+                    trace = raw_traces[gate_name]
+
+                    # ── LLM Inference entry (special rendering) ───────────────
+                    if gate_name == "__llm__":
+                        _llm_model  = trace.get("_model", "LLM")
+                        _llm_gen_ms = trace.get("_generation_ms", 0.0)
+                        _llm_lat_color = (
+                            _C_GREEN if _llm_gen_ms < 1000
+                            else _C_AMBER if _llm_gen_ms < 5000
+                            else _C_RED
+                        )
+                        st.markdown(
+                            f"<div style='font-size:0.72rem;font-weight:700;"
+                            f"color:#9ECE6A;margin:8px 0 2px 0'>"
+                            f"🧠&nbsp;LLM Inference"
+                            f"<span style='font-weight:400;color:{_C_DIM};"
+                            f"margin-left:8px'>{_llm_model}</span>"
+                            f"<span style='font-weight:400;color:{_llm_lat_color};"
+                            f"margin-left:6px'>· {_llm_gen_ms:,.0f} ms</span>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+                        req = trace.get("request") or {}
+                        res = trace.get("response") or {}
+                        col_req, col_res = st.columns(2)
+                        with col_req:
+                            st.json(req if req else {}, expanded=False)
+                        with col_res:
+                            st.json(res if res else {}, expanded=False)
+                        continue
+
+                    # ── Security gate entry ───────────────────────────────────
+                    metric  = metric_map.get(gate_name)
+                    verdict = metric.get("verdict", "") if metric else ""
+                    latency = metric.get("latency_ms", 0.0) if metric else 0.0
+                    v_color = _VERDICT_COLORS.get(verdict, _C_DIM)
+                    lat_color = (
+                        _C_GREEN if latency < 100
+                        else _C_AMBER if latency < 1000
+                        else _C_RED
+                    )
+                    emoji = _GATE_EMOJI.get(gate_name, "●")
+                    label = _GATE_DISPLAY.get(gate_name, gate_name[:14])
+
+                    # Gate sub-header (name + verdict + latency, full width)
                     st.markdown(
-                        f"<span style='color:{color};font-weight:700'>"
-                        f"{emoji} verdict: {verdict}</span>"
-                        f"&nbsp;&nbsp;|&nbsp;&nbsp;latency: **{latency:.1f} ms**"
-                        f"&nbsp;&nbsp;|&nbsp;&nbsp;score: **{score:.3f}**",
+                        f"<div style='font-size:0.72rem;font-weight:700;"
+                        f"color:#7AA2F7;margin:8px 0 2px 0'>"
+                        f"{emoji}&nbsp;{label}"
+                        f"<span style='font-weight:400;color:{v_color};"
+                        f"margin-left:8px'>{verdict}</span>"
+                        f"<span style='font-weight:400;color:{lat_color};"
+                        f"margin-left:6px'>· {latency:,.0f} ms</span>"
+                        f"</div>",
                         unsafe_allow_html=True,
                     )
-                    if detail:
-                        st.caption(detail)
+                    req = trace.get("request") or {}
+                    res = trace.get("response") or {}
+                    # Always render two columns so JSON stays aligned with headers
+                    col_req, col_res = st.columns(2)
+                    with col_req:
+                        st.json(req if req else {}, expanded=False)
+                    with col_res:
+                        st.json(res if res else {}, expanded=False)
+
+    if title is None:
+        _render_body()
+    else:
+        with st.expander(title, expanded=expanded):
+            _render_body()
 
 
 # ── 2. Context window utilisation (inline, chat history) ─────────────────────
@@ -1026,34 +1165,117 @@ def render_gate_chip_trace(
     gate_metrics: list[dict],
     gate_modes: dict[str, str] | None = None,
     *,
-    title: str = "GATE TRACE",
+    title: str = "🔍 Gate Trace",
+    expanded: bool = False,
+    llm_model: str = "",
+    llm_generation_ms: float = 0.0,
 ) -> None:
-    """Compact gate chip trace — one row per gate.
+    """Compact gate chip trace — one row per gate, optionally inside a collapsible expander.
 
-    Shared by the Static Red Team and Dynamic (PAIR) red-team tabs.
-    Each chip displays: emoji + gate name | VERDICT badge | [mode] | detail | ms.
+    Shared by Static, PAIR, and Batch red-team views.  Each chip displays:
+    emoji + gate name | VERDICT badge | [mode] | detail | latency ms.
+
+    A visual LLM separator row is automatically inserted between the last
+    input gate and the first output gate when output-side gate keys are
+    detected in the metrics list.
 
     Args:
-        gate_metrics:  List of metric dicts produced by PipelineManager.
-                       Keys: ``gate_name``, ``verdict``, ``latency_ms``,
-                       ``score``, ``detail``.
-        gate_modes:    Session ``gate_modes`` dict for the mode badge.
-                       Pass ``None`` to suppress the mode column.
-        title:         Section header rendered above the chips.
-                       Pass ``""`` to suppress.
+        gate_metrics:       List of metric dicts from PipelineManager.
+        gate_modes:         Session ``gate_modes`` dict for the mode badge.
+        title:              Expander title. Pass ``""`` for inline rendering.
+        expanded:           When True the expander starts open.
+        llm_model:          Target model name shown on the LLM separator row.
+        llm_generation_ms:  Token-generation time reported by Ollama (ms).
     """
     if not gate_metrics:
         return
 
     import html as _html
 
-    if title:
-        _tel_section(title)
+    # ── Gate State colour map (mode badge) ────────────────────────────────────
+    # ENFORCE = red   — gate will actively block matching inputs
+    # AUDIT   = amber — gate detects but never blocks (observe-only)
+    # OFF     = grey  — gate is disabled entirely
+    _MODE_COLORS: dict[str, str] = {
+        "ENFORCE": "#F7768E",
+        "AUDIT":   "#E0AF68",
+        "OFF":     "#555566",
+    }
+
+    # ── Column widths (shared between header and data rows for alignment) ─────
+    _W_NAME    = "120px"   # Gate Name
+    _W_VERDICT = "62px"    # Scan Result badge
+    _W_MODE    = "82px"    # Gate State badge
+    _W_LAT     = "58px"    # Latency
+
+    # ── Column header row ─────────────────────────────────────────────────────
+    header_row = (
+        f"<div style='display:flex;align-items:center;gap:6px;"
+        f"padding:3px 8px;font-size:0.60rem;font-family:ui-monospace,monospace;"
+        f"color:{_C_DIM};letter-spacing:0.06em;text-transform:uppercase;"
+        f"border-bottom:1px solid #2a2a3a;margin-bottom:4px'>"
+        f"<span style='width:{_W_NAME};min-width:{_W_NAME};flex-shrink:0'>"
+        f"Gate Name</span>"
+        f"<span style='width:{_W_VERDICT};min-width:{_W_VERDICT};flex-shrink:0'>"
+        f"Scan Result</span>"
+        f"<span style='width:{_W_MODE};min-width:{_W_MODE};flex-shrink:0'>"
+        f"Gate State</span>"
+        f"<span style='flex:1;min-width:0'>Scan Reasoning</span>"
+        f"<span style='width:{_W_LAT};min-width:{_W_LAT};flex-shrink:0;"
+        f"text-align:right'>Latency</span>"
+        f"</div>"
+    )
+
+    # Pre-scan: does this trace contain any output-side gates?
+    gate_names_in_trace = [m.get("gate_name", "") for m in gate_metrics]
+    has_output_gates    = any(g in _OUTPUT_GATE_KEYS for g in gate_names_in_trace)
+    llm_separator_inserted = False
+
+    # ── LLM separator row (built once, inserted between input & output gates) ─
+    lat_str_llm = (
+        f"{llm_generation_ms:,.0f} ms" if llm_generation_ms > 0 else "—"
+    )
+    lat_color_llm = (
+        _C_GREEN if llm_generation_ms < 500
+        else _C_AMBER if llm_generation_ms < 3000
+        else _C_RED
+    ) if llm_generation_ms > 0 else _C_DIM
+    model_label = llm_model.split(":")[0] if llm_model else "LLM"
+    llm_sep_row = (
+        f"<div style='display:flex;align-items:center;gap:6px;"
+        f"padding:5px 8px;border-radius:4px;"
+        f"background:rgba(122,162,247,0.07);"
+        f"border:1px solid #3a3a5a;"
+        f"font-size:0.70rem;font-family:ui-monospace,monospace;"
+        f"margin-bottom:3px;margin-top:6px'>"
+        # icon + label
+        f"<span style='width:{_W_NAME};min-width:{_W_NAME};flex-shrink:0;"
+        f"font-weight:700;color:#7AA2F7;white-space:nowrap'>"
+        f"🤖&nbsp;{model_label}</span>"
+        # centre label
+        f"<span style='flex:1;color:{_C_DIM};font-size:0.63rem;"
+        f"letter-spacing:0.05em;text-transform:uppercase'>"
+        f"── LLM Inference ──</span>"
+        # generation latency
+        f"<span style='width:{_W_LAT};min-width:{_W_LAT};flex-shrink:0;"
+        f"color:{lat_color_llm};font-size:0.63rem;white-space:nowrap;"
+        f"text-align:right'>{lat_str_llm}</span>"
+        f"</div>"
+    )
 
     chips: list[str] = []
 
     for m in gate_metrics:
         gate    = m.get("gate_name", "?")
+        # Insert LLM separator row once, immediately before first output gate
+        if (
+            has_output_gates
+            and not llm_separator_inserted
+            and gate in _OUTPUT_GATE_KEYS
+        ):
+            chips.append(llm_sep_row)
+            llm_separator_inserted = True
+
         verdict = m.get("verdict", "PASS")
         latency = m.get("latency_ms", 0.0)
         score   = float(m.get("score", 0.0))
@@ -1063,10 +1285,24 @@ def render_gate_chip_trace(
         label   = _GATE_DISPLAY.get(gate, gate[:14])
         v_color = _VERDICT_COLORS.get(verdict, _C_DIM)
 
-        mode_str = (
-            f"[{gate_modes[gate]}]"
+        # Gate State — mode badge with colour coding
+        mode_key = (
+            gate_modes.get(gate, "").upper()
             if gate_modes and gate in gate_modes
             else ""
+        )
+        m_color = _MODE_COLORS.get(mode_key, _C_DIM)
+        mode_cell = (
+            f"<span style='width:{_W_MODE};min-width:{_W_MODE};flex-shrink:0;"
+            f"display:inline-flex;align-items:center'>"
+            f"<span style='background:{m_color}22;color:{m_color};"
+            f"padding:1px 6px;border-radius:3px;font-size:0.63rem;"
+            f"font-weight:700;letter-spacing:0.04em;white-space:nowrap'>"
+            f"{mode_key or '—'}</span>"
+            f"</span>"
+        ) if mode_key else (
+            f"<span style='width:{_W_MODE};min-width:{_W_MODE};"
+            f"flex-shrink:0;color:{_C_DIM};font-size:0.63rem'>—</span>"
         )
 
         # Latency colour: green < 100 ms, amber < 1 000 ms, red ≥ 1 000 ms
@@ -1081,14 +1317,8 @@ def render_gate_chip_trace(
         if not detail and gate not in _BINARY_GATES and score >= 0.005:
             detail = f"score {score:.3f}"
 
-        detail_safe  = _html.escape(detail[:80]) if detail else "—"
+        detail_safe  = _html.escape(detail[:90]) if detail else "—"
         detail_title = _html.escape(detail) if detail else ""
-
-        mode_cell = (
-            f"<span style='color:{_C_DIM};font-size:0.63rem;"
-            f"white-space:nowrap'>{mode_str}</span>"
-            if mode_str else ""
-        )
 
         chips.append(
             f"<div style='display:flex;align-items:center;gap:6px;"
@@ -1097,31 +1327,42 @@ def render_gate_chip_trace(
             f"border:1px solid #2a2a3a;"
             f"font-size:0.70rem;font-family:ui-monospace,monospace;"
             f"overflow:hidden;margin-bottom:3px'>"
-            # name
-            f"<span style='font-weight:600;min-width:100px;color:{_C_TEXT};"
-            f"white-space:nowrap'>{emoji} {label}</span>"
-            # verdict badge
+            # Gate Name
+            f"<span style='width:{_W_NAME};min-width:{_W_NAME};flex-shrink:0;"
+            f"font-weight:600;color:{_C_TEXT};white-space:nowrap;overflow:hidden;"
+            f"text-overflow:ellipsis'>{emoji}&nbsp;{label}</span>"
+            # Scan Result badge
+            f"<span style='width:{_W_VERDICT};min-width:{_W_VERDICT};flex-shrink:0;"
+            f"display:inline-flex;align-items:center'>"
             f"<span style='background:{v_color}22;color:{v_color};"
             f"padding:1px 6px;border-radius:3px;font-size:0.63rem;"
             f"font-weight:700;letter-spacing:0.04em;white-space:nowrap'>"
-            f"{verdict}</span>"
-            # mode (optional)
+            f"{verdict}</span></span>"
+            # Gate State badge (colour-coded by mode)
             f"{mode_cell}"
-            # detail
-            f"<span style='color:{_C_LABEL};flex:1;overflow:hidden;"
+            # Scan Reasoning
+            f"<span style='color:{_C_LABEL};flex:1;min-width:0;overflow:hidden;"
             f"text-overflow:ellipsis;white-space:nowrap;font-size:0.65rem'"
             f" title='{detail_title}'>{detail_safe}</span>"
-            # latency
-            f"<span style='color:{lat_color};font-size:0.63rem;"
-            f"white-space:nowrap;margin-left:auto;padding-left:6px'>"
-            f"{lat_str}</span>"
+            # Latency
+            f"<span style='width:{_W_LAT};min-width:{_W_LAT};flex-shrink:0;"
+            f"color:{lat_color};font-size:0.63rem;white-space:nowrap;"
+            f"text-align:right'>{lat_str}</span>"
             f"</div>"
         )
 
-    st.markdown(
-        f"<div style='margin:4px 0'>{''.join(chips)}</div>",
-        unsafe_allow_html=True,
+    chips_html = (
+        f"<div style='margin:4px 0'>"
+        f"{header_row}"
+        f"{''.join(chips)}"
+        f"</div>"
     )
+
+    if title:
+        with st.expander(title, expanded=expanded):
+            st.markdown(chips_html, unsafe_allow_html=True)
+    else:
+        st.markdown(chips_html, unsafe_allow_html=True)
 
 
 # ── 3. Legacy sidebar hw panel (no longer called, kept for reference) ─────────
