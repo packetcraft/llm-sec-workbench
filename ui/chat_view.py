@@ -254,6 +254,17 @@ def render(pipeline: "PipelineManager", config: dict) -> None:
     _render_chat_area(pipeline, config)
 
 
+def render_sidebar(pipeline: "PipelineManager", config: dict) -> None:
+    """Public entry point for the full sidebar (model, gates, generation, session).
+
+    Called by non-chat views (e.g. Red Teaming) that share the same sidebar
+    controls but have their own main-area content.  Injects global CSS tokens
+    so metrics_panel components render correctly regardless of which view is active.
+    """
+    _inject_global_css()
+    _render_sidebar(pipeline, config)
+
+
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 
 def _inject_global_css() -> None:

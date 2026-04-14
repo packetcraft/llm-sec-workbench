@@ -23,6 +23,11 @@ render_api_inspector(raw_traces, metrics)
 
 render_context_bar(prompt_tokens, model_name, ollama_host)
     Inline context window utilisation bar (used in chat history replay).
+
+render_gate_chip_trace(gate_metrics, gate_modes, *, title)
+    Compact one-row-per-gate chip trace for red-team views.
+    Each chip: emoji + name | VERDICT badge | [mode] | detail | latency ms.
+    Shared by Static and Dynamic (PAIR) red-team tabs.
 """
 
 from __future__ import annotations
@@ -63,6 +68,24 @@ _VERDICT_EMOJI: dict[str, str] = {
     "ERROR": "🟠",
     "SKIP":  "⚫",
     "AUDIT": "🟡",
+}
+
+# Gate emoji map — used by render_gate_chip_trace()
+_GATE_EMOJI: dict[str, str] = {
+    "custom_regex":   "🔤",
+    "token_limit":    "📏",
+    "invisible_text": "👻",
+    "fast_scan":      "🔍",
+    "classify":       "🎯",
+    "toxicity_in":    "☣️",
+    "ban_topics":     "🚫",
+    "mod_llm":        "🛡️",
+    "sensitive_out":  "🔒",
+    "malicious_urls": "🌐",
+    "no_refusal":     "🤐",
+    "bias_out":       "⚖️",
+    "relevance":      "📎",
+    "deanonymize":    "🔓",
 }
 
 
@@ -993,6 +1016,110 @@ def render_context_bar(
         f"<div style='background:#2a2a3a;border-radius:3px;height:5px;overflow:hidden'>"
         f"<div style='background:{color};width:{max(int(pct*100),1)}%;height:100%;"
         f"border-radius:3px;transition:width 0.3s'></div></div></div>",
+        unsafe_allow_html=True,
+    )
+
+
+# ── 3. Gate chip trace (red-team views) ──────────────────────────────────────
+
+def render_gate_chip_trace(
+    gate_metrics: list[dict],
+    gate_modes: dict[str, str] | None = None,
+    *,
+    title: str = "GATE TRACE",
+) -> None:
+    """Compact gate chip trace — one row per gate.
+
+    Shared by the Static Red Team and Dynamic (PAIR) red-team tabs.
+    Each chip displays: emoji + gate name | VERDICT badge | [mode] | detail | ms.
+
+    Args:
+        gate_metrics:  List of metric dicts produced by PipelineManager.
+                       Keys: ``gate_name``, ``verdict``, ``latency_ms``,
+                       ``score``, ``detail``.
+        gate_modes:    Session ``gate_modes`` dict for the mode badge.
+                       Pass ``None`` to suppress the mode column.
+        title:         Section header rendered above the chips.
+                       Pass ``""`` to suppress.
+    """
+    if not gate_metrics:
+        return
+
+    import html as _html
+
+    if title:
+        _tel_section(title)
+
+    chips: list[str] = []
+
+    for m in gate_metrics:
+        gate    = m.get("gate_name", "?")
+        verdict = m.get("verdict", "PASS")
+        latency = m.get("latency_ms", 0.0)
+        score   = float(m.get("score", 0.0))
+        detail  = m.get("detail", "")
+
+        emoji   = _GATE_EMOJI.get(gate, "●")
+        label   = _GATE_DISPLAY.get(gate, gate[:14])
+        v_color = _VERDICT_COLORS.get(verdict, _C_DIM)
+
+        mode_str = (
+            f"[{gate_modes[gate]}]"
+            if gate_modes and gate in gate_modes
+            else ""
+        )
+
+        # Latency colour: green < 100 ms, amber < 1 000 ms, red ≥ 1 000 ms
+        lat_color = (
+            _C_GREEN if latency < 100
+            else _C_AMBER if latency < 1000
+            else _C_RED
+        )
+        lat_str = f"{latency:,.0f} ms" if latency > 0 else "—"
+
+        # Fall back to score annotation when no detail string is present
+        if not detail and gate not in _BINARY_GATES and score >= 0.005:
+            detail = f"score {score:.3f}"
+
+        detail_safe  = _html.escape(detail[:80]) if detail else "—"
+        detail_title = _html.escape(detail) if detail else ""
+
+        mode_cell = (
+            f"<span style='color:{_C_DIM};font-size:0.63rem;"
+            f"white-space:nowrap'>{mode_str}</span>"
+            if mode_str else ""
+        )
+
+        chips.append(
+            f"<div style='display:flex;align-items:center;gap:6px;"
+            f"padding:4px 8px;border-radius:4px;"
+            f"background:rgba(255,255,255,0.025);"
+            f"border:1px solid #2a2a3a;"
+            f"font-size:0.70rem;font-family:ui-monospace,monospace;"
+            f"overflow:hidden;margin-bottom:3px'>"
+            # name
+            f"<span style='font-weight:600;min-width:100px;color:{_C_TEXT};"
+            f"white-space:nowrap'>{emoji} {label}</span>"
+            # verdict badge
+            f"<span style='background:{v_color}22;color:{v_color};"
+            f"padding:1px 6px;border-radius:3px;font-size:0.63rem;"
+            f"font-weight:700;letter-spacing:0.04em;white-space:nowrap'>"
+            f"{verdict}</span>"
+            # mode (optional)
+            f"{mode_cell}"
+            # detail
+            f"<span style='color:{_C_LABEL};flex:1;overflow:hidden;"
+            f"text-overflow:ellipsis;white-space:nowrap;font-size:0.65rem'"
+            f" title='{detail_title}'>{detail_safe}</span>"
+            # latency
+            f"<span style='color:{lat_color};font-size:0.63rem;"
+            f"white-space:nowrap;margin-left:auto;padding-left:6px'>"
+            f"{lat_str}</span>"
+            f"</div>"
+        )
+
+    st.markdown(
+        f"<div style='margin:4px 0'>{''.join(chips)}</div>",
         unsafe_allow_html=True,
     )
 
