@@ -1,11 +1,6 @@
 # **Comprehensive Unified Payments Interface (UPI) FAQ Dataset**
 
-## **1\. Open WebUI Knowledge Base Configuration (For Administrators)**
-
-**Q: What is the best file format for uploading this FAQ dataset into an Open WebUI knowledge base?** **A:** Markdown (.md) is highly recommended. Open WebUI's extraction engines (like Apache Tika) and text splitters naturally use Markdown headers to create semantic chunks, preventing question-and-answer pairs from being separated during vectorization.1
-
-**Q: What are the optimal Retrieval-Augmented Generation (RAG) settings for processing technical UPI documentation in Open WebUI?** **A:** For complex, structured documents, it is best to set your chunk size to approximately 2000 tokens with a chunk overlap of 200 tokens. Using an embedding model like nomic-embed-text paired with a high context-length LLM yields the best retrieval accuracy.1 Additionally, embedding rich metadata into the file prior to upload ensures accurate internal citations.3
-
+## **1\
 ## ---
 
 **2\. Registration, VPA Management, and Core Capabilities**
