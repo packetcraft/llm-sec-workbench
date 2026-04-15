@@ -561,21 +561,6 @@ def _render_sidebar(pipeline: "PipelineManager", config: dict) -> None:
     with st.sidebar:
         _inject_sidebar_css()
 
-        # ── Branding ──────────────────────────────────────────────────────────
-        st.markdown(
-            "<div style='display:flex;align-items:center;gap:8px;"
-            "padding:10px 2px 14px;border-bottom:1px solid #2a2a3a;margin-bottom:6px'>"
-            "<span style='font-size:1.2rem'>🛡️</span>"
-            "<div>"
-            "<div style='color:#cdd6f4;font-size:0.82rem;font-weight:700;"
-            "letter-spacing:0.02em;line-height:1.2'>LLM Security Workbench</div>"
-            "<div style='color:#555566;font-size:0.62rem;letter-spacing:0.06em;"
-            "text-transform:uppercase'>Local · Research · Red Team</div>"
-            "</div>"
-            "</div>",
-            unsafe_allow_html=True,
-        )
-
         # ── MODEL ─────────────────────────────────────────────────────────────
         _sb_section("MODEL")
         available_models = pipeline.client.list_models()
@@ -818,6 +803,11 @@ def _render_chat_area(pipeline: "PipelineManager", config: dict) -> None:
     )
     prompt = st.chat_input(placeholder)
 
+    # Pick up threats sent from the sidebar staging area
+    if not prompt and st.session_state.get("pending_prompt"):
+        prompt = st.session_state.pending_prompt
+        st.session_state.pending_prompt = ""
+
     if st.session_state.demo_mode:
         _render_chat_content(pipeline, config, prompt)
         return
@@ -845,45 +835,6 @@ def _render_chat_content(pipeline: "PipelineManager", config: dict, prompt: str 
     if not st.session_state.demo_mode and st.session_state.get("rag_context", "").strip():
         _rag_words = len(st.session_state.rag_context.split())
         st.caption(f"⚡ RAG context active — {_rag_words} words injected into system prompt")
-
-    # ── Threat pre-fill staging area ──────────────────────────────────────────
-    # When the Inject button writes to inject_prompt, show an editable text area
-    # with Send / Cancel controls before the chat history. On Send the staged
-    # text is processed exactly like a normal user prompt; on Cancel it is cleared.
-    if not st.session_state.demo_mode and st.session_state.get("inject_prompt"):
-        staged = st.session_state.inject_prompt
-        st.markdown(
-            "<div style='background:rgba(224,175,104,0.08);border-left:3px solid #E0AF68;"
-            "border-radius:4px;padding:5px 10px 2px 10px;margin:4px 0 6px 0;"
-            "font-size:0.65rem;color:#E0AF68;font-weight:700;letter-spacing:0.08em'>"
-            "⚡ THREAT STAGED — edit if needed, then Send</div>",
-            unsafe_allow_html=True,
-        )
-        edited = st.text_area(
-            "staged_threat",
-            value=staged,
-            height=100,
-            label_visibility="collapsed",
-            key="inject_staged_text",
-        )
-        s_col, c_col = st.columns([1, 1], gap="small")
-        with s_col:
-            send_clicked = st.button(
-                "Send threat →", key="inject_send_btn", use_container_width=True, type="primary"
-            )
-        with c_col:
-            cancel_clicked = st.button(
-                "Cancel", key="inject_cancel_btn", use_container_width=True
-            )
-        if cancel_clicked:
-            st.session_state.inject_prompt = ""
-            st.rerun()
-        if send_clicked and edited.strip():
-            # Route through the normal prompt handler by overwriting the `prompt`
-            # variable in the calling scope — achieved by mutating session state
-            # and forcing the prompt to be treated as if typed.
-            st.session_state.inject_prompt = ""
-            prompt = edited.strip()
 
     # ── Empty-state welcome ────────────────────────────────────────────────────
     if not st.session_state.messages:
@@ -927,6 +878,30 @@ def _render_chat_content(pipeline: "PipelineManager", config: dict, prompt: str 
                 st.markdown(msg["content"])
 
             if msg["role"] == "assistant" and not st.session_state.demo_mode:
+                # Security Scan Results — always shown for history turns
+                _h_metrics = msg.get("gate_metrics") or []
+                if _h_metrics:
+                    _h_notices = [
+                        m for m in _h_metrics
+                        if m.get("verdict") == "BLOCK"
+                        and m.get("gate_name") not in {
+                            "token_limit", "invisible_text", "custom_regex", "deanonymize",
+                        }
+                    ]
+                    _h_label = (
+                        f"🔍 Security Scan Results ({len(_h_notices)} event{'s' if len(_h_notices) != 1 else ''})"
+                        if _h_notices else "🔍 Security Scan Results"
+                    )
+                    with st.expander(_h_label, expanded=False):
+                        if _h_notices:
+                            for _hm in _h_notices:
+                                _hg    = _hm.get("gate_name", "")
+                                _hlbl  = _GATE_LABEL.get(_hg, _hg)
+                                _hdet  = _hm.get("detail", "")
+                                st.warning(f"**{_hlbl}** — {_hdet}" if _hdet else f"**{_hlbl}** flagged", icon="🔴")
+                        else:
+                            st.success("All gates passed — no security events detected.", icon="✅")
+
                 # Gate Trace — always collapsed in history
                 if msg.get("raw_traces"):
                     _msg_tel = msg.get("telemetry") or {}
@@ -1039,183 +1014,206 @@ def _render_chat_content(pipeline: "PipelineManager", config: dict, prompt: str 
                         _out_lat  = _out_blk.get("latency_ms", 0.0) if _out_blk else 0.0
                         _block_banner(_out_gate, _out_lat, context="output")
 
-                # 5. Security scan notices — collected and shown in a single expander.
-                #    Expander opens automatically when any notice is a hard BLOCK;
-                #    stays collapsed for AUDIT-mode monitoring signals.
-                if not st.session_state.demo_mode:
-                    _notices: list[tuple[str, str, str, bool]] = []
+            # ── 5 & 6: Security notices + Gate Trace ─────────────────────────────
+            # Rendered for ALL turns — blocked and non-blocked alike — so the
+            # user can always see which gate fired and inspect the raw traces.
+            if not st.session_state.demo_mode:
+                # 5. Collect gate scan events and render in a single expander.
+                _notices: list[tuple[str, str, str, bool]] = []
 
-                    _fs = next(
-                        (m for m in payload.metrics
-                         if m.get("gate_name") == "fast_scan" and m.get("verdict") == "BLOCK"),
-                        None,
-                    )
-                    if _fs:
-                        _notices.append((
-                            "🛡️",
-                            "PII detected, masked, and transparently restored",
-                            f"{_fs['detail']}  \n"
-                            "The LLM never saw your real data: placeholders (e.g. `[REDACTED_PERSON_1]`) "
-                            "were sent in place of the original values. "
-                            "The response you see above has had those placeholders silently swapped back — "
-                            "no `[REDACTED_*]` tags visible, your original values intact.",
-                            False,
-                        ))
+                _fs = next(
+                    (m for m in payload.metrics
+                     if m.get("gate_name") == "fast_scan" and m.get("verdict") == "BLOCK"),
+                    None,
+                )
+                if _fs:
+                    _notices.append((
+                        "🛡️",
+                        "PII detected, masked, and transparently restored",
+                        f"{_fs['detail']}  \n"
+                        "The LLM never saw your real data: placeholders (e.g. `[REDACTED_PERSON_1]`) "
+                        "were sent in place of the original values. "
+                        "The response you see above has had those placeholders silently swapped back — "
+                        "no `[REDACTED_*]` tags visible, your original values intact.",
+                        False,
+                    ))
 
-                    _so = next(
-                        (m for m in payload.metrics
-                         if m.get("gate_name") == "sensitive_out" and m.get("verdict") == "BLOCK"),
-                        None,
-                    )
-                    if _so:
-                        _notices.append((
-                            "🔍",
-                            "LLM-generated PII detected and redacted",
-                            f"{_so['detail']}  \n"
-                            "The model's response contained PII it produced on its own — "
-                            "not from your input. Sensitive entities have been replaced with "
-                            "type placeholders (e.g. `[PERSON]`, `[US_SSN]`) in the response above.",
-                            True,
-                        ))
+                _cl = next(
+                    (m for m in payload.metrics
+                     if m.get("gate_name") == "classify" and m.get("verdict") == "BLOCK"),
+                    None,
+                )
+                if _cl:
+                    _notices.append((
+                        "💉",
+                        "Prompt injection / jailbreak detected",
+                        f"{_cl['detail']}  \n"
+                        "The DeBERTa injection classifier flagged this prompt as a likely adversarial "
+                        "input. In AUDIT mode the prompt was allowed through — switch the gate to "
+                        "ENFORCE to block such inputs before they reach the model.",
+                        True,
+                    ))
 
-                    _mu = next(
-                        (m for m in payload.metrics
-                         if m.get("gate_name") == "malicious_urls" and m.get("verdict") == "BLOCK"),
-                        None,
-                    )
-                    if _mu:
-                        _notices.append((
-                            "🔴",
-                            "Malicious URL detected and removed",
-                            "A URL in the model's response was classified as malicious or a "
-                            "phishing attempt. It has been replaced with [REDACTED_URL] in the "
-                            f"response above. Reason: {_mu['detail']}",
-                            True,
-                        ))
+                _so = next(
+                    (m for m in payload.metrics
+                     if m.get("gate_name") == "sensitive_out" and m.get("verdict") == "BLOCK"),
+                    None,
+                )
+                if _so:
+                    _notices.append((
+                        "🔍",
+                        "LLM-generated PII detected and redacted",
+                        f"{_so['detail']}  \n"
+                        "The model's response contained PII it produced on its own — "
+                        "not from your input. Sensitive entities have been replaced with "
+                        "type placeholders (e.g. `[PERSON]`, `[US_SSN]`) in the response above.",
+                        True,
+                    ))
 
-                    _nr = next(
-                        (m for m in payload.metrics
-                         if m.get("gate_name") == "no_refusal" and m.get("verdict") == "BLOCK"),
-                        None,
-                    )
-                    if _nr:
-                        _notices.append((
-                            "🤚",
-                            "Model declined to answer",
-                            f"{_nr['detail']}  \n"
-                            "The refusal detector fired. In a red-team context this means the "
-                            "model's safety training held. In a production context it may indicate "
-                            "an over-restrictive safety policy.",
-                            False,
-                        ))
+                _mu = next(
+                    (m for m in payload.metrics
+                     if m.get("gate_name") == "malicious_urls" and m.get("verdict") == "BLOCK"),
+                    None,
+                )
+                if _mu:
+                    _notices.append((
+                        "🔴",
+                        "Malicious URL detected and removed",
+                        "A URL in the model's response was classified as malicious or a "
+                        "phishing attempt. It has been replaced with [REDACTED_URL] in the "
+                        f"response above. Reason: {_mu['detail']}",
+                        True,
+                    ))
 
-                    _ti = next(
-                        (m for m in payload.metrics
-                         if m.get("gate_name") == "toxicity_in" and m.get("verdict") == "BLOCK"),
-                        None,
-                    )
-                    if _ti:
-                        _notices.append((
-                            "⚠️",
-                            "Hostile or toxic input detected",
-                            f"{_ti['detail']}  \n"
-                            "The input tone was flagged by the Toxicity / Sentiment scanner. "
-                            "Switch the gate to ENFORCE to block such inputs.",
-                            False,
-                        ))
+                _nr = next(
+                    (m for m in payload.metrics
+                     if m.get("gate_name") == "no_refusal" and m.get("verdict") == "BLOCK"),
+                    None,
+                )
+                if _nr:
+                    _notices.append((
+                        "🤚",
+                        "Model declined to answer",
+                        f"{_nr['detail']}  \n"
+                        "The refusal detector fired. In a red-team context this means the "
+                        "model's safety training held. In a production context it may indicate "
+                        "an over-restrictive safety policy.",
+                        False,
+                    ))
 
-                    _bt = next(
-                        (m for m in payload.metrics
-                         if m.get("gate_name") == "ban_topics" and m.get("verdict") == "BLOCK"),
-                        None,
-                    )
-                    if _bt:
-                        _notices.append((
-                            "🚫",
-                            "Restricted topic detected",
-                            f"{_bt['detail']}  \n"
-                            "This prompt covers a subject area that has been restricted by the operator. "
-                            "Switch the gate to ENFORCE to block such prompts before they reach the model.",
-                            False,
-                        ))
+                _ti = next(
+                    (m for m in payload.metrics
+                     if m.get("gate_name") == "toxicity_in" and m.get("verdict") == "BLOCK"),
+                    None,
+                )
+                if _ti:
+                    _notices.append((
+                        "⚠️",
+                        "Hostile or toxic input detected",
+                        f"{_ti['detail']}  \n"
+                        "The input tone was flagged by the Toxicity / Sentiment scanner. "
+                        "Switch the gate to ENFORCE to block such inputs.",
+                        False,
+                    ))
 
-                    _ml = next(
-                        (m for m in payload.metrics
-                         if m.get("gate_name") == "mod_llm" and m.get("verdict") == "BLOCK"),
-                        None,
-                    )
-                    if _ml:
-                        _notices.append((
-                            "🤖",
-                            "Llama Guard 3 safety violation (LLM-as-a-judge)",
-                            f"{_ml['detail']}  \n"
-                            "The Llama Guard 3 model identified a policy violation in this prompt. "
-                            "As an LLM judge, verdicts may occasionally produce false positives — "
-                            "review the violated categories before switching the gate to ENFORCE.",
-                            True,
-                        ))
+                _bt = next(
+                    (m for m in payload.metrics
+                     if m.get("gate_name") == "ban_topics" and m.get("verdict") == "BLOCK"),
+                    None,
+                )
+                if _bt:
+                    _notices.append((
+                        "🚫",
+                        "Restricted topic detected",
+                        f"{_bt['detail']}  \n"
+                        "This prompt covers a subject area that has been restricted by the operator. "
+                        "Switch the gate to ENFORCE to block such prompts before they reach the model.",
+                        False,
+                    ))
 
-                    _bo = next(
-                        (m for m in payload.metrics
-                         if m.get("gate_name") == "bias_out" and m.get("verdict") == "BLOCK"),
-                        None,
-                    )
-                    if _bo:
-                        _notices.append((
-                            "⚠️",
-                            "Biased or toxic content detected in response",
-                            f"{_bo['detail']}  \n"
-                            "The model's response was flagged by the Bias / Toxicity output scanner. "
-                            "The response is shown as-is — switch the gate to ENFORCE to suppress it.",
-                            False,
-                        ))
+                _ml = next(
+                    (m for m in payload.metrics
+                     if m.get("gate_name") == "mod_llm" and m.get("verdict") == "BLOCK"),
+                    None,
+                )
+                if _ml:
+                    _notices.append((
+                        "🤖",
+                        "Llama Guard 3 safety violation (LLM-as-a-judge)",
+                        f"{_ml['detail']}  \n"
+                        "The Llama Guard 3 model identified a policy violation in this prompt. "
+                        "As an LLM judge, verdicts may occasionally produce false positives — "
+                        "review the violated categories before switching the gate to ENFORCE.",
+                        True,
+                    ))
 
-                    _rv = next(
-                        (m for m in payload.metrics
-                         if m.get("gate_name") == "relevance" and m.get("verdict") == "BLOCK"),
-                        None,
-                    )
-                    if _rv:
-                        _notices.append((
-                            "🔎",
-                            "Response may be off-topic",
-                            f"{_rv['detail']}  \n"
-                            "The Relevance gate found low similarity between your prompt and the "
-                            "model's response — a potential hallucination signal or sign that a "
-                            "jailbreak redirected the model's attention.",
-                            False,
-                        ))
+                _bo = next(
+                    (m for m in payload.metrics
+                     if m.get("gate_name") == "bias_out" and m.get("verdict") == "BLOCK"),
+                    None,
+                )
+                if _bo:
+                    _notices.append((
+                        "⚠️",
+                        "Biased or toxic content detected in response",
+                        f"{_bo['detail']}  \n"
+                        "The model's response was flagged by the Bias / Toxicity output scanner. "
+                        "The response is shown as-is — switch the gate to ENFORCE to suppress it.",
+                        False,
+                    ))
 
+                _rv = next(
+                    (m for m in payload.metrics
+                     if m.get("gate_name") == "relevance" and m.get("verdict") == "BLOCK"),
+                    None,
+                )
+                if _rv:
+                    _notices.append((
+                        "🔎",
+                        "Response may be off-topic",
+                        f"{_rv['detail']}  \n"
+                        "The Relevance gate found low similarity between your prompt and the "
+                        "model's response — a potential hallucination signal or sign that a "
+                        "jailbreak redirected the model's attention.",
+                        False,
+                    ))
+
+                _any_hard_block = any(n[3] for n in _notices)
+                _n_label = (
+                    f"🔍 Security Scan Results ({len(_notices)} event{'s' if len(_notices) > 1 else ''})"
+                    if _notices else "🔍 Security Scan Results"
+                )
+                with st.expander(_n_label, expanded=_any_hard_block):
                     if _notices:
-                        _any_hard_block = any(n[3] for n in _notices)
-                        _n_label = f"🔍 Security Scan Results ({len(_notices)} event{'s' if len(_notices) > 1 else ''})"
-                        with st.expander(_n_label, expanded=_any_hard_block):
-                            for _icon, _headline, _body, _is_blk in _notices:
-                                if _is_blk:
-                                    st.warning(f"**{_headline}** — {_body}", icon=_icon)
-                                else:
-                                    st.info(f"**{_headline}** — {_body}", icon=_icon)
+                        for _icon, _headline, _body, _is_blk in _notices:
+                            if _is_blk:
+                                st.warning(f"**{_headline}** — {_body}", icon=_icon)
+                            else:
+                                st.info(f"**{_headline}** — {_body}", icon=_icon)
+                    else:
+                        st.success(
+                            "All gates passed — no security events detected.",
+                            icon="✅",
+                        )
 
-                # 6. Telemetry — persist TPS for sidebar panel (no longer shown inline)
-                if not st.session_state.demo_mode:
-                    if stream_result:
-                        st.session_state.last_tps = payload.tokens_per_second
-                    # Gate Trace — collapsed by default on live turn too
-                    if payload.raw_traces:
-                        with st.expander("🔍 Gate Trace", expanded=False):
-                            render_gate_chip_trace(
-                                payload.metrics,
-                                gate_modes=st.session_state.gate_modes,
-                                title="",
-                                llm_model=st.session_state.get("target_model", ""),
-                                llm_generation_ms=payload.generation_ms,
-                            )
-                            render_api_inspector(
-                                payload.raw_traces,
-                                payload.metrics,
-                                title=None,
-                                show_summary=False,
-                            )
+                # 6. Telemetry — persist TPS; Gate Trace always shown
+                if stream_result:
+                    st.session_state.last_tps = payload.tokens_per_second
+                if payload.raw_traces:
+                    with st.expander("🔍 Gate Trace", expanded=False):
+                        render_gate_chip_trace(
+                            payload.metrics,
+                            gate_modes=st.session_state.gate_modes,
+                            title="",
+                            llm_model=st.session_state.get("target_model", ""),
+                            llm_generation_ms=payload.generation_ms,
+                        )
+                        render_api_inspector(
+                            payload.raw_traces,
+                            payload.metrics,
+                            title=None,
+                            show_summary=False,
+                        )
 
         # 6. Persist telemetry for the right-side Live Telemetry Panel.
         #    Written unconditionally so the panel always reflects the last turn.
@@ -1442,27 +1440,65 @@ def _render_turn_footer(
 
 
 def _render_threat_panel() -> None:
-    """Render the threat injection control row (workbench mode only).
+    """Render the threat injection control in the sidebar (workbench mode only).
 
-    Displays a flat selectbox of all threats from ``data/threats.json``
-    and an Inject button. Clicking Inject writes the selected threat's
-    ``example`` text to ``st.session_state.inject_prompt`` and reruns,
-    which causes ``_render_chat_content`` to show the pre-fill staging area.
-    Hidden in Demo Mode.
+    Two states:
+    - Default: dropdown of all threats + "⚡ Inject threat" button.
+      Clicking sets ``inject_prompt`` and reruns to show the staging state.
+    - Staging: editable text area pre-filled with the threat text, plus
+      "Send threat →" and "Cancel" buttons — all inside the sidebar.
+      On Send, the text is written to ``pending_prompt`` (picked up by
+      ``_render_chat_area``) and the staging state is cleared.
     """
     options, examples = _threat_options()
     if not options:
         return
 
-    selected = st.selectbox(
-        "INSERT THREAT",
-        options,
-        index=0,
-        key="threat_select",
-    )
-    if st.button("⚡ Inject threat", key="threat_inject_btn", use_container_width=True):
-        st.session_state.inject_prompt = examples.get(selected, "")
-        st.rerun()
+    if st.session_state.get("inject_prompt"):
+        # ── Staging state — edit + send/cancel in sidebar ─────────────────
+        st.markdown(
+            "<div style='background:rgba(224,175,104,0.08);border-left:3px solid #E0AF68;"
+            "border-radius:4px;padding:5px 8px 3px;margin:4px 0 6px;"
+            "font-size:0.63rem;color:#E0AF68;font-weight:700;letter-spacing:0.08em'>"
+            "⚡ THREAT STAGED — edit if needed</div>",
+            unsafe_allow_html=True,
+        )
+        edited = st.text_area(
+            "staged_threat_sb",
+            value=st.session_state.inject_prompt,
+            height=110,
+            label_visibility="collapsed",
+            key="inject_staged_text_sb",
+        )
+        s_col, c_col = st.columns(2, gap="small")
+        with s_col:
+            send_clicked = st.button(
+                "Send →", key="inject_send_btn_sb",
+                use_container_width=True, type="primary",
+            )
+        with c_col:
+            cancel_clicked = st.button(
+                "Cancel", key="inject_cancel_btn_sb",
+                use_container_width=True,
+            )
+        if cancel_clicked:
+            st.session_state.inject_prompt = ""
+            st.rerun()
+        if send_clicked and edited.strip():
+            st.session_state.pending_prompt = edited.strip()
+            st.session_state.inject_prompt  = ""
+            st.rerun()
+    else:
+        # ── Default state — select + inject button ─────────────────────────
+        selected = st.selectbox(
+            "INSERT THREAT",
+            options,
+            index=0,
+            key="threat_select",
+        )
+        if st.button("⚡ Inject threat", key="threat_inject_btn", use_container_width=True):
+            st.session_state.inject_prompt = examples.get(selected, "")
+            st.rerun()
 
 
 def _render_pipeline_banner(pipeline: "PipelineManager") -> None:

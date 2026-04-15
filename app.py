@@ -145,9 +145,11 @@ def _init_session_state(config: dict) -> None:
         # Set once on first page load; never overwritten.
         "session_start_ts": time.time(),
 
-        # Threat injection pre-fill — set by the Inject button; read and cleared
-        # by _render_chat_content to show the editable text-area staging row.
-        "inject_prompt": "",
+        # Threat injection — inject_prompt holds staged text shown in sidebar;
+        # pending_prompt is set when the user clicks Send and is consumed by
+        # _render_chat_area on the next rerun as if typed in st.chat_input.
+        "inject_prompt":  "",
+        "pending_prompt": "",
 
         # ── Red Teaming (Steps 3–6) ───────────────────────────────────────────
         # Static tab: last single-shot result dict (threat metadata + gate trace)
@@ -314,7 +316,25 @@ def main() -> None:
 
     # ── Top-level navigation ──────────────────────────────────────────────────
     with st.sidebar:
-        st.markdown("## Navigation")
+        # ── Hero branding ─────────────────────────────────────────────────────
+        st.markdown(
+            "<div style='padding:18px 4px 20px;text-align:center;"
+            "border-bottom:1px solid #2a2a3a;margin-bottom:12px'>"
+            "<div style='font-size:2rem;margin-bottom:6px'>🛡️</div>"
+            "<div style='color:#cdd6f4;font-size:1rem;font-weight:700;"
+            "letter-spacing:0.02em;line-height:1.3'>LLM Security Workbench</div>"
+            "<div style='color:#555566;font-size:0.62rem;letter-spacing:0.10em;"
+            "text-transform:uppercase;margin-top:3px'>Local · Research · Red Team</div>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
+        st.markdown(
+            "<div style='font-size:0.68rem;color:#555566;font-weight:700;"
+            "letter-spacing:0.12em;text-transform:uppercase;"
+            "margin-bottom:4px'>Navigation</div>",
+            unsafe_allow_html=True,
+        )
         page = st.radio(
             label="page",
             options=[
