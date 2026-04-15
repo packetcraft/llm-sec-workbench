@@ -169,6 +169,22 @@ def _init_session_state(config: dict) -> None:
         "batch_import_threats":  [],    # threats loaded via Import button (session-only)
         "batch_delay_ms":        500,   # delay between requests (ms)
 
+        # ── Semantic Guard (Layer 3 — LLM Judge: General) ────────────────────
+        # Judge model tag — defaults to shieldgemma:2b (safety-fine-tuned, fastest).
+        # Gate degrades to SKIP if the model is not pulled in Ollama.
+        "semantic_guard_model":         "shieldgemma:2b",
+        # Confidence threshold; prompts flagged below this are not blocked
+        "semantic_guard_threshold":     0.70,
+        # Safety system prompt; empty = use the built-in default policy
+        "semantic_guard_system_prompt": "",
+
+        # ── Little Canary (Layer 3 — LLM Judge: General) ─────────────────────
+        # Canary model — small, fast, intentionally easy to hijack (1–2B recommended).
+        # Gate degrades to SKIP if little-canary is not installed.
+        "little_canary_model":     "qwen2.5:1.5b",
+        # Risk score threshold 0–1; scores >= threshold trigger a block
+        "little_canary_threshold": 0.6,
+
         # Index into data/pair_goals.json for the preset dropdown.
         # None = not yet resolved; the view resolves it to the "Custom Goal…" entry.
         "pair_goal_preset_idx": None,
@@ -193,15 +209,20 @@ def _init_session_state(config: dict) -> None:
         "token_limit":    "ENFORCE",  # Phase 3 — Token budget (zero-ML)
         "invisible_text": "ENFORCE",  # Phase 3 — Unicode steganography (zero-ML)
         "fast_scan":      "AUDIT",    # Phase 3 — PII / Secrets scanner
+        "gibberish":      "AUDIT",    # Phase 3 — Noise-flood / gibberish input (quality)
+        "language_in":    "AUDIT",    # Phase 3 — Language enforcement (multilingual bypass)
         "classify":       "AUDIT",    # Phase 3 — Prompt-Guard injection classifier
         "toxicity_in":    "AUDIT",    # Phase 3 — Hostile/toxic input tone (quality)
-        "ban_topics":     "AUDIT",    # Phase 3 — Forbidden subject-area filter (zero-shot)
-        "mod_llm":        "AUDIT",    # Phase 4 — Llama Guard 3 LLM safety judge (Ollama)
+        "ban_topics":      "AUDIT",    # Phase 3 — Forbidden subject-area filter (zero-shot)
+        "semantic_guard":  "AUDIT",    # Phase 4 — LLM Judge: General (configurable policy)
+        "little_canary":   "AUDIT",    # Phase 4 — LLM Judge: General (behavioral canary probe)
+        "mod_llm":         "AUDIT",    # Phase 4 — LLM Judge: Specialised (Llama Guard 3)
         "sensitive_out":  "AUDIT",    # Phase 3 — Output-side PII scan (LLM-generated PII)
         "malicious_urls": "ENFORCE",  # Phase 3 — Malicious URL detection (output gate)
         "no_refusal":     "AUDIT",    # Phase 3 — Model refusal detection (output gate)
         "bias_out":       "AUDIT",    # Phase 3 — Biased/toxic output (quality)
         "relevance":      "AUDIT",    # Phase 3 — Off-topic / hallucination (quality)
+        "language_same":  "AUDIT",    # Phase 3 — Response language consistency (quality)
         "deanonymize":    "ENFORCE",  # Phase 3 — PII restoration (output gate)
     }
     for gate_key, gate_default in gate_defaults.items():
@@ -236,12 +257,12 @@ def _build_pipeline(config: dict, ollama_host: str, client):
     from gates.regex_gate import CustomRegexGate
     from gates.local_scanners import (
         TokenLimitGate, InvisibleTextGate,
-        FastScanGate, PromptGuardGate, DeanonymizeGate,
+        FastScanGate, GibberishGate, LanguageGate, PromptGuardGate, DeanonymizeGate,
         SensitiveGate, MaliciousURLsGate, NoRefusalGate,
-        ToxicityInputGate, BiasOutputGate, RelevanceGate,
+        ToxicityInputGate, BiasOutputGate, RelevanceGate, LanguageSameGate,
         BanTopicsGate,
     )
-    from gates.ollama_gates import LlamaGuardGate
+    from gates.ollama_gates import LlamaGuardGate, SemanticGuardGate, LittleCanaryGate
 
     thresholds = config.get("thresholds", {})
 
@@ -263,6 +284,13 @@ def _build_pipeline(config: dict, ollama_host: str, client):
                 "scan_secrets":  True,
                 "pii_threshold": st.session_state.get("pii_threshold", 0.7),
             })),
+            ("gibberish",      GibberishGate(config={
+                "threshold": thresholds.get("gibberish", 0.97),
+            })),
+            ("language_in",    LanguageGate(config={
+                "valid_languages": config.get("language", {}).get("valid_languages", ["en"]),
+                "threshold":       thresholds.get("language_in", 0.6),
+            })),
             ("classify",       PromptGuardGate(config={
                 "threshold":  thresholds.get("prompt_guard_injection", 0.80),
                 "model_name": "protectai/deberta-v3-base-prompt-injection-v2",
@@ -274,6 +302,19 @@ def _build_pipeline(config: dict, ollama_host: str, client):
             ("ban_topics",     BanTopicsGate(config={
                 "topics":    [t.strip() for t in _raw_topics.split(",") if t.strip()],
                 "threshold": thresholds.get("ban_topics", 0.5),
+            })),
+            ("semantic_guard", SemanticGuardGate(config={
+                "host":          ollama_host,
+                "model":         st.session_state.get("semantic_guard_model", ""),
+                "threshold":     thresholds.get("semantic_guard",
+                                     st.session_state.get("semantic_guard_threshold", 0.70)),
+                "system_prompt": st.session_state.get("semantic_guard_system_prompt", ""),
+            })),
+            ("little_canary",  LittleCanaryGate(config={
+                "host":      ollama_host,
+                "model":     st.session_state.get("little_canary_model", "qwen2.5:1.5b"),
+                "threshold": thresholds.get("little_canary",
+                                 st.session_state.get("little_canary_threshold", 0.6)),
             })),
             ("mod_llm",        LlamaGuardGate(config={
                 "host":  ollama_host,
@@ -295,6 +336,9 @@ def _build_pipeline(config: dict, ollama_host: str, client):
             })),
             ("relevance",      RelevanceGate(config={
                 "threshold": thresholds.get("relevance", 0.5),
+            })),
+            ("language_same",  LanguageSameGate(config={
+                "threshold": thresholds.get("language_same", 0.1),
             })),
             ("deanonymize",    DeanonymizeGate(config={})),
         ],

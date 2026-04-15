@@ -4,6 +4,11 @@ gates/local_scanners.py
 Gate 1b TokenLimitGate   — Rejects prompts exceeding a token budget (tiktoken).
 Gate 1c InvisibleTextGate — Detects hidden Unicode characters used in injection attacks.
 Gate 1a FastScanGate     — PII and secrets detection via llm-guard (CPU/Presidio).
+Gate 1f GibberishGate    — Noise-flood / token-waste detection via llm-guard Gibberish
+         (madhurjindal/autonlp-Gibberish-Detector). Quality gate — defaults to AUDIT.
+Gate 1g LanguageGate     — Enforces language policy via llm-guard Language
+         (papluca/xlm-roberta-base-language-detection). Blocks non-English by default.
+         Prevents multilingual jailbreak bypass. Quality gate — defaults to AUDIT.
 Gate 2  PromptGuardGate  — Injection/jailbreak classification via
          protectai/deberta-v3-base-prompt-injection-v2 (CPU).
 Gate 1d ToxicityInputGate — Detects hostile/abusive/toxic input tone (Toxicity +
@@ -21,6 +26,9 @@ Gate E  BiasOutputGate   — Detects biased or toxic content in model responses
          (Bias + Toxicity sub-scanners). Quality gate — defaults to AUDIT.
 Gate F  RelevanceGate    — Detects off-topic or hallucinated responses using
          BAAI embedding similarity. Quality gate — defaults to AUDIT.
+Gate G  LanguageSameGate — Ensures response language matches prompt language via
+         llm-guard LanguageSame (papluca/xlm-roberta-base-language-detection).
+         Catches multilingual response drift. Quality gate — defaults to AUDIT.
 
 Gates 1b and 1c are zero-ML (pure Python / tiktoken) and run in < 1 ms.
 They sit before FastScanGate in the pipeline so oversized or tampered prompts
@@ -380,6 +388,172 @@ class FastScanGate(SecurityGate):
                 "score":      round(score, 4),
                 "verdict":    "PASS",
                 "detail":     "No PII or secrets detected.",
+            })
+
+        return payload
+
+
+# ── Gate 1f: GibberishGate ───────────────────────────────────────────────────
+
+class GibberishGate(SecurityGate):
+    """Detects incoherent, garbled, or noise-flood input.
+
+    Uses llm-guard's ``Gibberish`` input scanner
+    (``madhurjindal/autonlp-Gibberish-Detector-492513457``) to classify input
+    into four quality levels: ``clean``, ``mild gibberish``, ``noise``, and
+    ``word salad``.  Any label other than ``clean`` that exceeds the threshold
+    triggers a BLOCK verdict.
+
+    Catches token-waste attacks and random-character floods that could:
+      - Exhaust model context with noise.
+      - Confuse downstream ML gates by making their input ambiguous.
+      - Disguise injection payloads inside entropy.
+
+    Quality gate — defaults to AUDIT.  Hard-blocking on gibberish alone can
+    cause false positives on unusual but legitimate technical prompts (code
+    snippets, command-line text, non-Latin scripts) — monitor first.
+
+    Config keys
+    -----------
+    threshold : float (default 0.97) — gibberish confidence cutoff.
+                Very high by default to minimise false positives on technical
+                content.  Lower to 0.80 to catch more borderline inputs.
+    """
+
+    @property
+    def name(self) -> str:
+        return "gibberish"
+
+    def _scan(self, payload: PipelinePayload) -> PipelinePayload:
+        t_start = time.perf_counter()
+
+        if not _LLM_GUARD_OK:
+            return _llm_guard_skip(self.name, t_start, payload)
+
+        from llm_guard.input_scanners import Gibberish
+
+        threshold = float(self.config.get("threshold", 0.97))
+
+        scanner = Gibberish(threshold=threshold)
+        _, is_valid, risk_score = scanner.scan(payload.original_input)
+
+        latency_ms = round((time.perf_counter() - t_start) * 1000, 2)
+
+        payload.raw_traces[self.name] = {
+            "request": {
+                "text_checked": payload.original_input,
+                "threshold":    threshold,
+            },
+            "response": {
+                "is_valid":   is_valid,
+                "risk_score": round(float(risk_score), 4),
+            },
+        }
+
+        if not is_valid:
+            payload.is_blocked   = True
+            payload.block_reason = (
+                f"Gibberish / noise-flood input detected "
+                f"(score={float(risk_score):.2f} \u2265 threshold={threshold:.2f})."
+            )
+            payload.metrics.append({
+                "gate_name":  self.name,
+                "latency_ms": latency_ms,
+                "score":      round(float(risk_score), 4),
+                "verdict":    "BLOCK",
+                "detail":     payload.block_reason,
+            })
+        else:
+            payload.metrics.append({
+                "gate_name":  self.name,
+                "latency_ms": latency_ms,
+                "score":      round(float(risk_score), 4),
+                "verdict":    "PASS",
+                "detail":     f"Input is coherent (gibberish score={float(risk_score):.2f}).",
+            })
+
+        return payload
+
+
+# ── Gate 1g: LanguageGate ────────────────────────────────────────────────────
+
+class LanguageGate(SecurityGate):
+    """Enforces language policy on user prompts.
+
+    Uses llm-guard's ``Language`` input scanner
+    (``papluca/xlm-roberta-base-language-detection``) to identify the prompt
+    language and block inputs whose detected language is not on the allow-list.
+
+    Prevents multilingual jailbreak bypass — attacks phrased in Arabic,
+    Chinese, Russian, etc. to evade English-trained safety classifiers
+    (Toxicity, BanTopics, Injection Detect) that run downstream.
+
+    Quality gate — defaults to AUDIT.  Enable ENFORCE only after confirming
+    that your user base is genuinely monolingual; multilingual deployments
+    should widen ``valid_languages`` rather than disable the gate.
+
+    Config keys
+    -----------
+    valid_languages : list[str] (default ["en"]) — ISO 639-1 language codes
+                      that are allowed through.  E.g. ["en", "fr", "de"].
+    threshold       : float     (default 0.6)    — minimum classifier
+                      confidence for a language detection to count.  Inputs
+                      below this confidence pass through (ambiguous text is
+                      treated as valid to avoid blocking very short prompts).
+    """
+
+    @property
+    def name(self) -> str:
+        return "language_in"
+
+    def _scan(self, payload: PipelinePayload) -> PipelinePayload:
+        t_start = time.perf_counter()
+
+        if not _LLM_GUARD_OK:
+            return _llm_guard_skip(self.name, t_start, payload)
+
+        from llm_guard.input_scanners import Language
+
+        valid_languages = self.config.get("valid_languages", ["en"])
+        threshold       = float(self.config.get("threshold", 0.6))
+
+        scanner = Language(valid_languages=valid_languages, threshold=threshold)
+        _, is_valid, risk_score = scanner.scan(payload.original_input)
+
+        latency_ms = round((time.perf_counter() - t_start) * 1000, 2)
+
+        payload.raw_traces[self.name] = {
+            "request": {
+                "text_checked":    payload.original_input,
+                "valid_languages": valid_languages,
+                "threshold":       threshold,
+            },
+            "response": {
+                "is_valid":   is_valid,
+                "risk_score": round(float(risk_score), 4),
+            },
+        }
+
+        if not is_valid:
+            payload.is_blocked   = True
+            payload.block_reason = (
+                f"Prompt language not in allowed list {valid_languages} "
+                f"(score={float(risk_score):.2f})."
+            )
+            payload.metrics.append({
+                "gate_name":  self.name,
+                "latency_ms": latency_ms,
+                "score":      round(float(risk_score), 4),
+                "verdict":    "BLOCK",
+                "detail":     payload.block_reason,
+            })
+        else:
+            payload.metrics.append({
+                "gate_name":  self.name,
+                "latency_ms": latency_ms,
+                "score":      round(float(risk_score), 4),
+                "verdict":    "PASS",
+                "detail":     f"Prompt language is within allowed list {valid_languages}.",
             })
 
         return payload
@@ -1017,6 +1191,101 @@ class RelevanceGate(SecurityGate):
                 "score":      round(float(risk_score), 4),
                 "verdict":    "PASS",
                 "detail":     f"Response is on-topic (similarity={similarity:.2f}).",
+            })
+
+        return payload
+
+
+# ── Gate G: LanguageSameGate ─────────────────────────────────────────────────
+
+class LanguageSameGate(SecurityGate):
+    """Ensures the model responds in the same language as the user prompt.
+
+    Uses llm-guard's ``LanguageSame`` output scanner to detect the language of
+    both the prompt and the response, then checks for overlap.  A mismatch
+    signals:
+      - The LLM silently switched language mid-response.
+      - A multilingual jailbreak succeeded in redirecting the model's output.
+      - The model drifted to a training-data language after an unusual prompt.
+
+    Shares the ``papluca/xlm-roberta-base-language-detection`` model weights
+    with ``LanguageGate`` (input) — no additional memory is consumed when both
+    gates are active.
+
+    Quality gate — defaults to AUDIT.
+
+    Config keys
+    -----------
+    threshold : float (default 0.1) — minimum classifier confidence for a
+                language detection to count in either prompt or response.
+                Low by default to catch weak language signals; raise to 0.5+
+                to reduce false positives on very short or mixed-language text.
+    """
+
+    @property
+    def name(self) -> str:
+        return "language_same"
+
+    def _scan(self, payload: PipelinePayload) -> PipelinePayload:
+        t_start = time.perf_counter()
+
+        if not _LLM_GUARD_OK:
+            return _llm_guard_skip(self.name, t_start, payload)
+
+        from llm_guard.output_scanners import LanguageSame
+
+        if not payload.output_text:
+            payload.metrics.append({
+                "gate_name":  self.name,
+                "latency_ms": round((time.perf_counter() - t_start) * 1000, 2),
+                "score":      0.0,
+                "verdict":    "SKIP",
+                "detail":     "No output text to scan.",
+            })
+            return payload
+
+        threshold = float(self.config.get("threshold", 0.1))
+
+        scanner = LanguageSame(threshold=threshold)
+        _, is_valid, risk_score = scanner.scan(
+            payload.original_input,
+            payload.output_text,
+        )
+
+        latency_ms = round((time.perf_counter() - t_start) * 1000, 2)
+
+        payload.raw_traces[self.name] = {
+            "request": {
+                "prompt":    payload.original_input,
+                "response":  payload.output_text[:200],  # truncate for trace readability
+                "threshold": threshold,
+            },
+            "response": {
+                "is_valid":   is_valid,
+                "risk_score": round(float(risk_score), 4),
+            },
+        }
+
+        if not is_valid:
+            payload.is_blocked   = True
+            payload.block_reason = (
+                f"Response language does not match prompt language "
+                f"(score={float(risk_score):.2f})."
+            )
+            payload.metrics.append({
+                "gate_name":  self.name,
+                "latency_ms": latency_ms,
+                "score":      round(float(risk_score), 4),
+                "verdict":    "BLOCK",
+                "detail":     payload.block_reason,
+            })
+        else:
+            payload.metrics.append({
+                "gate_name":  self.name,
+                "latency_ms": latency_ms,
+                "score":      round(float(risk_score), 4),
+                "verdict":    "PASS",
+                "detail":     "Response language matches prompt language.",
             })
 
         return payload

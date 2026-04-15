@@ -121,10 +121,19 @@ else
     echo "[spaCy] en_core_web_lg already installed. Skipping download."
 fi
 
-# ── 6. Check Ollama ──────────────────────────────────────────────────────────
+# ── 6. Check Ollama & pull required models ───────────────────────────────────
 echo ""
 OLLAMA_URL="${OLLAMA_HOST:-http://localhost:11434}"
-if ! curl -s -o /dev/null -w "%{http_code}" "$OLLAMA_URL" 2>/dev/null | grep -q "200"; then
+if curl -s -o /dev/null -w "%{http_code}" "$OLLAMA_URL" 2>/dev/null | grep -q "200"; then
+    # Pull qwen2.5:1.5b (Little Canary canary model) if not already present
+    if ! ollama list 2>/dev/null | grep -q "qwen2.5:1.5b"; then
+        echo "[Ollama] Pulling qwen2.5:1.5b (Little Canary canary model, ~934 MB) ..."
+        ollama pull qwen2.5:1.5b
+        echo "[Ollama] qwen2.5:1.5b ready."
+    else
+        echo "[Ollama] qwen2.5:1.5b already present."
+    fi
+else
     echo "[Warning] Ollama not reachable at $OLLAMA_URL."
     echo "          LLM features will be unavailable until Ollama is running."
     echo "          Download: https://ollama.com/download"

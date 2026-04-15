@@ -79,6 +79,36 @@ GATE_INFO: dict[str, dict] = {
         "block_means": "PII or credentials were detected in the prompt.",
     },
 
+    "gibberish": {
+        "label":       "Gibberish Detect",
+        "category":    "Input",
+        "method":      "ml",
+        "latency":     "20 – 100 ms",
+        "description": (
+            "Classifies the prompt into four quality levels — clean, mild gibberish, "
+            "noise, and word salad — using a fine-tuned HuggingFace classifier "
+            "(madhurjindal/autonlp-Gibberish-Detector). Catches noise-flood and "
+            "token-waste attacks. Threshold is set high (0.97) by default to avoid "
+            "false positives on unusual but legitimate technical inputs."
+        ),
+        "block_means": "Input classified as gibberish, noise, or word salad above threshold.",
+    },
+
+    "language_in": {
+        "label":       "Language Enforce",
+        "category":    "Input",
+        "method":      "ml",
+        "latency":     "50 – 200 ms",
+        "description": (
+            "Detects the prompt language using XLM-RoBERTa "
+            "(papluca/xlm-roberta-base-language-detection) and blocks inputs not "
+            "in the configured allow-list (default: English only). Prevents "
+            "multilingual jailbreak bypass — attacks phrased in other languages to "
+            "evade English-trained safety classifiers downstream."
+        ),
+        "block_means": "Prompt language was not in the configured allow-list.",
+    },
+
     "classify": {
         "label":       "Injection Detect",
         "category":    "Input",
@@ -119,6 +149,44 @@ GATE_INFO: dict[str, dict] = {
             "Catches paraphrased attempts that easily bypass regex-based filters."
         ),
         "block_means": "Prompt topic matched a configured forbidden subject area.",
+    },
+
+    "semantic_guard": {
+        "label":       "Semantic Guard",
+        "category":    "Input",
+        "method":      "llm",
+        "latency":     "0.5 – 5 s",
+        "description": (
+            "LLM-as-judge with a fully user-editable safety system prompt. "
+            "Sends the prompt to a configurable Ollama model and expects a "
+            "structured JSON verdict {safe, confidence, reason}. Catches "
+            "intent-level threats — nuanced jailbreaks, social engineering, "
+            "false authority framing, and novel phrasing — that fixed "
+            "classifier models trained on labelled datasets may miss. "
+            "Recommended models: shieldgemma:2b (safety-fine-tuned, fastest) "
+            "or llama3.2:3b (general-purpose fallback). Fails open — any "
+            "error logs a metric but never blocks legitimate traffic."
+        ),
+        "block_means": "LLM judge classified prompt as unsafe with confidence ≥ threshold.",
+    },
+
+    "little_canary": {
+        "label":       "Little Canary",
+        "category":    "Input",
+        "method":      "llm",
+        "latency":     "1 – 5 s",
+        "description": (
+            "Behavioral prompt-injection probe using the little-canary library "
+            "(Hermes Labs). Three layers: (1) structural regex filter — 16 pattern "
+            "groups + base64/hex/ROT13/reverse decoders, ~1 ms, no Ollama needed; "
+            "(2) sandboxed canary Ollama probe — feeds the raw input to a small, "
+            "intentionally-weak model at temperature=0 so attacks produce visible "
+            "compromise residue; (3) BehavioralAnalyzer — examines the canary "
+            "response for persona shifts, instruction echoes, refusal collapses, and "
+            "authority granting. Recommended canary: qwen2.5:1.5b. "
+            "Requires `pip install little-canary`."
+        ),
+        "block_means": "Canary response showed compromise residue — injection detected.",
     },
 
     "mod_llm": {
@@ -207,6 +275,21 @@ GATE_INFO: dict[str, dict] = {
         "block_means": "Response similarity to the original question fell below threshold.",
     },
 
+    "language_same": {
+        "label":       "Language Match",
+        "category":    "Output",
+        "method":      "ml",
+        "latency":     "50 – 200 ms",
+        "description": (
+            "Detects whether the model responded in the same language as the prompt "
+            "using XLM-RoBERTa (papluca/xlm-roberta-base-language-detection). "
+            "Flags silent language switches and multilingual jailbreaks that redirect "
+            "the model's output language. Reuses model weights already loaded by the "
+            "Language Enforce gate — no additional memory cost when both are active."
+        ),
+        "block_means": "Response language did not match the detected prompt language.",
+    },
+
     "deanonymize": {
         "label":       "PII Restore",
         "category":    "Output",
@@ -225,10 +308,12 @@ GATE_INFO: dict[str, dict] = {
 # Execution-ordered list of gate keys (matches pipeline construction in app.py)
 INPUT_GATE_KEYS: list[str] = [
     "custom_regex", "token_limit", "invisible_text",
-    "fast_scan", "classify", "toxicity_in", "ban_topics", "mod_llm",
+    "fast_scan", "gibberish", "language_in",
+    "classify", "toxicity_in", "ban_topics",
+    "semantic_guard", "little_canary", "mod_llm",
 ]
 OUTPUT_GATE_KEYS: list[str] = [
     "sensitive_out", "malicious_urls", "no_refusal",
-    "bias_out", "relevance", "deanonymize",
+    "bias_out", "relevance", "language_same", "deanonymize",
 ]
 ALL_GATE_KEYS: list[str] = INPUT_GATE_KEYS + OUTPUT_GATE_KEYS

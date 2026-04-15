@@ -237,6 +237,60 @@ def render() -> None:
         """
     )
 
+    st.html(
+        """
+        <div style='margin-top:10px;padding:10px 14px;border:1px solid #2a2a3a;
+             border-radius:6px;background:rgba(122,162,247,0.04)'>
+          <div style='font-size:0.60rem;font-weight:700;letter-spacing:0.10em;
+               text-transform:uppercase;color:#555566;margin-bottom:8px'>
+            Open-Source Attribution
+          </div>
+          <div style='display:flex;flex-wrap:wrap;gap:6px 24px;font-size:0.72rem;color:#888'>
+            <span>
+              <span style='color:#7AA2F7;font-weight:600'>Gate pipeline architecture</span>
+              &nbsp;·&nbsp;
+              <a href='https://github.com/protectai/llm-guard'
+                 style='color:#7AA2F7;text-decoration:none'
+                 target='_blank'>protectai/llm-guard</a>
+            </span>
+            <span>
+              <span style='color:#7AA2F7;font-weight:600'>PII / Secrets detection &amp; restore</span>
+              &nbsp;·&nbsp;
+              <a href='https://github.com/microsoft/presidio'
+                 style='color:#7AA2F7;text-decoration:none'
+                 target='_blank'>microsoft/presidio</a>
+            </span>
+            <span>
+              <span style='color:#7AA2F7;font-weight:600'>Injection classifier</span>
+              &nbsp;·&nbsp;
+              <a href='https://github.com/microsoft/deberta'
+                 style='color:#7AA2F7;text-decoration:none'
+                 target='_blank'>microsoft/deberta</a>
+              <span style='color:#555566'> (base)</span>
+              &nbsp;+&nbsp;
+              <a href='https://huggingface.co/protectai/deberta-v3-base-prompt-injection-v2'
+                 style='color:#7AA2F7;text-decoration:none'
+                 target='_blank'>protectai fine-tune</a>
+            </span>
+            <span>
+              <span style='color:#7AA2F7;font-weight:600'>Safety classifier</span>
+              &nbsp;·&nbsp;
+              <a href='https://huggingface.co/meta-llama/Llama-Guard-3-8B'
+                 style='color:#7AA2F7;text-decoration:none'
+                 target='_blank'>meta-llama/Llama-Guard-3-8B</a>
+            </span>
+            <span>
+              <span style='color:#7AA2F7;font-weight:600'>Relevance embeddings</span>
+              &nbsp;·&nbsp;
+              <a href='https://huggingface.co/BAAI/bge-base-en-v1.5'
+                 style='color:#7AA2F7;text-decoration:none'
+                 target='_blank'>BAAI/bge-base-en-v1.5</a>
+            </span>
+          </div>
+        </div>
+        """
+    )
+
     # ── 4. Gate mode semantics ────────────────────────────────────────────────
     st.divider()
     st.markdown("#### Gate Mode Semantics")

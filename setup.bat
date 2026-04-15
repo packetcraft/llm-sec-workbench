@@ -59,7 +59,24 @@ if not exist ".env" (
     echo [env]    .env already exists -- skipping.
 )
 
-:: ── 6. Done ──────────────────────────────────────────────────────────────────
+:: ── 6. Pull Ollama models (if Ollama is running) ─────────────────────────────
+echo.
+curl -s -o nul -w "%%{http_code}" http://localhost:11434 2>nul | findstr "200" >nul
+if errorlevel 1 (
+    echo [Ollama] Not reachable - skipping model pulls.
+    echo         Start Ollama and run:  ollama pull qwen2.5:1.5b
+) else (
+    ollama list 2>nul | findstr "qwen2.5:1.5b" >nul
+    if errorlevel 1 (
+        echo [Ollama] Pulling qwen2.5:1.5b (Little Canary canary model, ~934 MB^) ...
+        ollama pull qwen2.5:1.5b
+        echo [Ollama] qwen2.5:1.5b ready.
+    ) else (
+        echo [Ollama] qwen2.5:1.5b already present. Skipping pull.
+    )
+)
+
+:: ── 7. Done ──────────────────────────────────────────────────────────────────
 echo.
 echo  ==========================================
 echo   Setup complete.

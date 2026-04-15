@@ -35,3 +35,9 @@ onnxruntime>=1.18.0
 # llm-guard requires Python <=3.12 (sentencepiece wheels stop at cp312).
 # Use py -3.11 or py -3.12 when creating the venv.
 llm-guard>=0.3.14
+
+# little-canary — behavioral injection probe (Hermes Labs).
+# Lightweight (~5 MB, no local model weights). Requires Python 3.9+.
+# Also pull the recommended canary model in Ollama:
+#   ollama pull qwen2.5:1.5b
+little-canary>=0.2.2
