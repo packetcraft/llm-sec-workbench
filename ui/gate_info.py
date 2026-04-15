@@ -3,7 +3,7 @@ ui/gate_info.py
 ───────────────
 Shared gate metadata — consumed by:
   • ui/chat_view.py      → sidebar ⓘ popovers on every gate toggle
-  • ui/howto_view.py     → How It Works educational page
+  • ui/howto_view.py     → Pipeline Reference page
 
 Each entry is keyed by the gate_key used in session_state.gate_modes.
 """

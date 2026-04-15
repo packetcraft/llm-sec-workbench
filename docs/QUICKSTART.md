@@ -228,21 +228,26 @@ agentic:
 
 ### Step B — Register the Hooks
 
-Claude Code hooks are configured in `.claude/settings.json`. This file is gitignored (kept local). Copy the committed template:
+The monitor supports both **Claude Code** and **Gemini CLI**.
 
-**Windows (Git Bash):**
+#### For Claude Code
+Claude Code hooks are configured in `.claude/settings.json`. Copy the committed template:
 ```bash
 cp hooks/settings.template.json .claude/settings.json
 ```
+This registers `PreToolUse` hooks for `Bash`, `Edit`, `Write`, `WebFetch`, and `mcp__*`, plus `PostToolUse` hooks for `Bash` and `WebFetch`.
 
-**Windows (PowerShell):**
-```powershell
-Copy-Item hooks\settings.template.json .claude\settings.json
+#### For Gemini CLI
+Gemini CLI hooks are configured in `.gemini/settings.json`. Create the file with this configuration:
+```json
+{
+  "hooks": {
+    "BeforeTool": [{ "matcher": ".*", "hooks": [{ "name": "agentic-guard", "type": "command", "command": "python hooks/agentic_guard.py" }] }],
+    "AfterTool": [{ "matcher": ".*", "hooks": [{ "name": "agentic-guard", "type": "command", "command": "python hooks/agentic_guard.py" }] }]
+  }
+}
 ```
-
-This registers `PreToolUse` hooks for `Bash`, `Edit`, `Write`, and `WebFetch`, plus a `PostToolUse` hook for `Bash` (output exfiltration audit).
-
-> **Note:** `.claude/settings.json` may already exist with your permission rules in `settings.local.json`. The hooks file is separate — both files are read by Claude Code independently.
+This registers `BeforeTool` and `AfterTool` hooks for all tools.
 
 ### Step C — Understand `audit_only` Mode
 
@@ -290,7 +295,8 @@ fname = sys.argv[1]
 with open(fname) as f:
     for line in f:
         r = json.loads(line)
-        print(r['event_type'], '|', r.get('tool_name',''), '|', r.get('verdict',''), '|', r.get('latency_ms',''), 'ms')
+        dec = len(r.get('decoded_segments', []))
+        print(r['event_type'], '|', r.get('tool_name',''), '|', r.get('verdict',''), '|', r.get('latency_ms',''), 'ms', '| decoded:', dec)
 " audit/<your-session-id>.jsonl
 ```
 

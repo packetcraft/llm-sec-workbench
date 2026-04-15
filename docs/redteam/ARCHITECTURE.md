@@ -10,11 +10,63 @@ The Red Teaming module (`ui/redteam_view.py`, `core/pair_runner.py`) provides th
 
 | Tab | Mode | Execution | Use Case |
 |-----|------|-----------|----------|
+| **How It Works** | Reference | Static | Architecture diagrams, gate reference, PAIR overview |
 | **Static** | Single-shot | Synchronous | Fire one threat and inspect the full gate trace |
 | **Batch** | Multi-shot | Generator loop | Run a filtered set of threats unattended; measure FP/FN rates |
 | **Dynamic (PAIR)** | Iterative | Async generator | Autonomous adversarial refinement via the PAIR algorithm |
 
 All three modes share the same `PipelineManager` instance constructed in `app.py`, so gate modes configured in the sidebar apply equally to all three tabs in real time.
+
+### Pipeline Architecture
+
+```mermaid
+graph LR
+    A([User Prompt]) --> B[Input Gates x8]
+    B -->|BLOCK| C([Pipeline Halted])
+    B -->|all pass| D[LLM Inference]
+    D --> E[Output Gates x6]
+    E -->|BLOCK| F([Response Blocked])
+    E -->|all pass| G([Response Delivered])
+```
+
+### Gate Reference
+
+**Input Gates** (run before LLM — all three modes):
+
+| Emoji | Display Name | Key | Description |
+|-------|-------------|-----|-------------|
+| 🔤 | Regex Hot-Patch | `custom_regex` | Pattern blocklist; sub-1 ms; catches exact known-bad strings |
+| 📏 | Token Limit | `token_limit` | Rejects prompts exceeding the configured token ceiling |
+| 👻 | Invisible Text | `invisible_text` | Detects Unicode zero-width and homoglyph injection attempts |
+| 🔍 | PII / Secrets | `fast_scan` | FastScan regex pass for PII entities, API keys, and credentials |
+| 🎯 | Injection Detect | `classify` | DeBERTa-based prompt injection classifier (confidence score) |
+| ☣️ | Toxicity (Input) | `toxicity_in` | Sentiment model flags hostile or toxic user inputs |
+| 🚫 | Ban Topics | `ban_topics` | Zero-shot topic filter — configurable topic deny-list |
+| 🛡️ | Llama Guard 3 | `mod_llm` | Safety-tuned LLM evaluates the full prompt for policy violations |
+
+**Output Gates** (run after LLM — Static and Batch only):
+
+| Emoji | Display Name | Key | Description |
+|-------|-------------|-----|-------------|
+| 🔒 | PII Out | `sensitive_out` | Scans LLM response for personally identifiable information |
+| 🌐 | Bad URLs | `malicious_urls` | Checks URLs in the response against a malicious-URL classifier |
+| 🤐 | Refusal Detect | `no_refusal` | Flags responses where the model refused instead of answering |
+| ⚖️ | Bias / Toxicity | `bias_out` | Detects biased or toxic language in the model's output |
+| 📎 | Relevance | `relevance` | Scores semantic similarity to the original query; catches hallucination drift |
+| 🔓 | PII Restore | `deanonymize` | Re-injects real PII tokens anonymized before the LLM call |
+
+### PAIR Data Flow
+
+```mermaid
+graph LR
+    ATK([Attacker LLM]) -->|crafts prompt| PL[Input Gates]
+    PL -->|BLOCK| FB[Feedback]
+    PL -->|PASS| TGT([Target LLM])
+    TGT -->|response| JDG([Judge LLM])
+    JDG -->|score + reason| FB
+    FB -->|next iteration| ATK
+    JDG -->|score >= threshold| BR([BREACH])
+```
 
 ---
 
@@ -333,7 +385,7 @@ Used by all three tabs as a nested expander inside Gate Trace. Renders a single 
 
 | File | Responsibility |
 |------|----------------|
-| `ui/redteam_view.py` | All three tab UIs, batch generator, PAIR event loop |
+| `ui/redteam_view.py` | All four tab UIs (How It Works, Static, Batch, Dynamic), batch generator, PAIR event loop |
 | `core/pair_runner.py` | PAIRRunner class — attacker/judge/target turns, run() generator |
 | `core/pipeline.py` | PipelineManager — execute(), run_input_gates(), run_output_gates() |
 | `core/payload.py` | PipelinePayload dataclass |

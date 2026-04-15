@@ -12,6 +12,7 @@ Responsibilities
 5. Route to the correct view:
      - Ollama unreachable        → connection error screen
      - Required models absent    → First Run download screen
+     - 🔧 Pipeline Reference      → ui/howto_view.py
      - 💬 Chat Workbench         → ui/chat_view.py
      - 🛡️ Agentic Security       → ui/agentic_view.py
      - ⚔️ Red Teaming            → ui/redteam_view.py
@@ -317,7 +318,7 @@ def main() -> None:
         page = st.radio(
             label="page",
             options=[
-                "📖 How It Works",
+                "🔧 Pipeline Reference",
                 "💬 Chat Workbench",
                 "🛡️ Agentic Security",
                 "⚔️ Red Teaming",
@@ -332,7 +333,7 @@ def main() -> None:
         render_agentic(config)
         return
 
-    if page == "📖 How It Works":
+    if page == "🔧 Pipeline Reference":
         from ui.howto_view import render as render_howto
         render_howto()
         return

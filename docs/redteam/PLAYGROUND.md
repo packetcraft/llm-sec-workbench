@@ -20,7 +20,9 @@ source venv/Scripts/activate   # Windows (Git Bash)
 python -m streamlit run app.py
 ```
 
-Navigate to **⚔️ Red Teaming** in the sidebar. You should see three tabs: **Static**, **Batch**, and **Dynamic (PAIR)**.
+Navigate to **⚔️ Red Teaming** in the sidebar. You should see four tabs: **How It Works**, **Static**, **Batch**, and **Dynamic (PAIR)**.
+
+For a full gate reference (all 14 gates, detection methods, OFF/AUDIT/ENFORCE semantics), visit **🔧 Pipeline Reference** in the sidebar. For an overview of the three operating modes and the PAIR algorithm, open the **📖 How It Works** tab here in Red Teaming.
 
 All three tabs share the gate configuration from the sidebar — changes you make during exercises take effect immediately.
 
