@@ -251,16 +251,11 @@ cp hooks/settings.template.json .claude/settings.json
 This registers `PreToolUse` hooks for `Bash`, `Edit`, `Write`, `WebFetch`, and `mcp__*`, plus `PostToolUse` hooks for `Bash` and `WebFetch`.
 
 #### For Gemini CLI
-Gemini CLI hooks are configured in `.gemini/settings.json`. Create the file with this configuration:
-```json
-{
-  "hooks": {
-    "BeforeTool": [{ "matcher": ".*", "hooks": [{ "name": "agentic-guard", "type": "command", "command": "python hooks/agentic_guard.py" }] }],
-    "AfterTool": [{ "matcher": ".*", "hooks": [{ "name": "agentic-guard", "type": "command", "command": "python hooks/agentic_guard.py" }] }]
-  }
-}
+Gemini CLI hooks are configured in `.gemini/settings.json`. Copy the committed template:
+```bash
+cp hooks/gemini_settings.template.json .gemini/settings.json
 ```
-This registers `BeforeTool` and `AfterTool` hooks for all tools.
+This registers `BeforeTool` and `AfterTool` hooks for all Gemini CLI tools (`matcher: ".*"`).
 
 ### Step C — Understand `audit_only` Mode
 
