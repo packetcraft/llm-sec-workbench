@@ -246,7 +246,7 @@ The monitor supports both **Claude Code** and **Gemini CLI**.
 #### For Claude Code
 Claude Code hooks are configured in `.claude/settings.json`. Copy the committed template:
 ```bash
-cp hooks/settings.template.json .claude/settings.json
+cp hooks/claude.settings.template.json .claude/settings.json
 ```
 This registers `PreToolUse` hooks for `Bash`, `Edit`, `Write`, `WebFetch`, and `mcp__*`, plus `PostToolUse` hooks for `Bash` and `WebFetch`.
 
