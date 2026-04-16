@@ -39,14 +39,22 @@ The application needs the following models available in Ollama before first laun
 # Primary target LLM
 ollama pull llama3
 
-# Safety moderation (Gate 3)
+# Safety moderation — Llama Guard 3 (L4 gate)
 ollama pull llama-guard3
 
-# Attacker/Defender LLM for Red Teaming (lightweight)
+# Attacker/Defender LLM for Red Teaming
 ollama pull phi3
+
+# LLM Judge — Semantic Guard (L3 gate, safety fine-tuned)
+ollama pull shieldgemma:2b
+
+# Behavioral canary — Little Canary (L3 gate)
+ollama pull qwen2.5:1.5b
 ```
 
 > The First Run loading screen in the app will detect missing models and display live download progress so you know the app is not frozen.
+
+> `shieldgemma:2b` and `qwen2.5:1.5b` are used by the L3 LLM Judge gates (Semantic Guard and Little Canary). If not pulled, those gates will fail-open and log an error metric — the rest of the pipeline continues unaffected.
 
 ---
 
@@ -70,13 +78,16 @@ Open `.env` and fill in your values:
 | Variable | Description | Required |
 |:---------|:------------|:---------|
 | `OLLAMA_HOST` | URL of your Ollama instance | Yes |
-| `PANW_API_KEY` | Palo Alto Networks AIRS key | Only for cloud gates |
+| `AIRS_API_KEY` | Palo Alto Networks AIRS API key (`x-pan-token` from Strata Cloud Manager) | Only for L5 cloud gates |
+| `AIRS_PROFILE` | AIRS AI security profile name configured in Strata Cloud Manager | Only for L5 cloud gates |
 
-For a native (non-Docker) run, change the `OLLAMA_HOST` to:
+For a native (non-Docker) run, the default `OLLAMA_HOST` value in `.env.example` is already correct:
 
 ```env
 OLLAMA_HOST="http://localhost:11434"
 ```
+
+The AIRS cloud gates (`airs_inlet`, `airs_dual`) degrade to **SKIP** when `AIRS_API_KEY` is absent or contains a placeholder value — no change needed for local-only operation.
 
 ---
 
@@ -196,6 +207,8 @@ By default, all gates start in `AUDIT` mode. You can change each gate independen
 | `OFF` | Gate is skipped entirely (zero latency cost) |
 | `AUDIT` | Gate scans and logs results, but never blocks the pipeline |
 | `ENFORCE` | Gate blocks the pipeline and returns a refusal on any violation |
+
+Most gates default to `AUDIT`. Four gates default to `ENFORCE` from the start: `token_limit`, `invisible_text`, `malicious_urls`, and `deanonymize`. See **🔧 Pipeline Reference** in the app for the full default mode table.
 
 ---
 
@@ -382,6 +395,9 @@ Run the installer and check **"Add python.exe to PATH"** on the first screen. Th
 py -3.11 --version
 ```
 
-**Prisma AIRS gates return errors**
-- Verify `PANW_API_KEY` is set correctly in `.env`.
-- Cloud gates are designed to **fail open** (they log an error but never block the pipeline on a timeout).
+**AIRS cloud gates show ERROR or are blocked unexpectedly**
+- Verify `AIRS_API_KEY` is set to your real `x-pan-token` value in `.env` (not the placeholder).
+- Verify `AIRS_PROFILE` matches an existing AI security profile name in Strata Cloud Manager.
+- `airs_inlet` is **fail-closed** in ENFORCE mode — a misconfigured key will block the pipeline. Switch the gate to AUDIT while troubleshooting credentials.
+- `airs_dual` is **fail-open** — errors log a metric but never suppress the response.
+- Both gates degrade to **SKIP** automatically when the key is absent or contains a placeholder value like `your-x-pan-token-here`.

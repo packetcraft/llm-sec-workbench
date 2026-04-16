@@ -6,34 +6,41 @@
 
 ## Features
 
-- **Configurable Security Pipeline** — 12 gates across input and output stages, each independently switchable between `OFF`, `AUDIT`, and `ENFORCE` modes.
+- **22-Gate, 6-Layer Security Pipeline** — input and output gates across Static, ML, LLM Judge (General + Specialised), and Cloud tiers, each independently switchable between `OFF`, `AUDIT`, and `ENFORCE` modes.
 - **Stateful `PipelinePayload`** — Upstream mutations (e.g., PII masking) are preserved without breaking downstream classifiers.
-- **Cost/Latency Funnel** — Cheapest and fastest checks run first; heavy LLM-backed gates run last.
+- **Cost/Latency Funnel** — L0 static rules run first (< 1 ms); cloud gates run last (0.5–2 s). Expensive checks only fire when cheaper ones pass.
+- **LLM-as-Judge (Configurable)** — Semantic Guard uses a user-editable safety system prompt against any Ollama model. Little Canary uses a behavioral canary probe to detect novel jailbreaks at runtime.
+- **Cloud Tier (Optional)** — AIRS Inlet + AIRS Dual connect to Palo Alto Networks AI Runtime Security for URL/IP reputation and enterprise DLP. Both gates degrade to SKIP when no API key is configured.
 - **Static Fuzzing** — Batch-run predefined or imported malicious payloads; export OWASP-mapped Markdown reports.
 - **Dynamic PAIR Red Teaming** — Attacker LLM iteratively refines prompts against the pipeline using the Chao et al. (2023) algorithm.
 - **Auto-Harden** — On a successful breach, a Defender LLM rewrites your system prompt to patch the identified vector.
-- **API Inspector** — Side-by-side raw JSON request/response traces for every active gate.
 - **Hardware Telemetry** — Live VRAM/RAM usage and tokens-per-second polled from Ollama every 5 seconds via `st.fragment`.
 - **Demo Mode** — One toggle hides all security instrumentation for clean end-user demonstrations.
 - **RAG Simulation** — Inject a simulated retrieved document into the LLM context to test indirect prompt injection.
 - **Hot-Patching** — Add custom block phrases in the sidebar for instant regex-based WAF simulation.
+- **Coding Agent Guard** — Real-time hook interception for Claude Code and Gemini CLI tool calls with allowlist, path, regex, and LLM-based verdict tiers. Full audit log with live feed, explorer, and dashboard.
 
 ---
 
 ## Security Gate Summary
 
-### Input Gates
+### Input Gates — 13 gates across 6 layers
 
-| Key | Gate | Tool | Defense Target | Default Mode |
-|:----|:-----|:-----|:---------------|:-------------|
-| `custom_regex` | CustomRegexGate | Python regex (zero-ML) | Hot-patch block phrases / WAF simulation | AUDIT |
-| `token_limit` | TokenLimitGate | tiktoken (zero-ML) | Prompt length — context exhaustion & injection hiding | ENFORCE |
-| `invisible_text` | InvisibleTextGate | Unicode Cf/Cc scan (zero-ML) | Hidden Unicode steganography | ENFORCE |
-| `fast_scan` | FastScanGate | llm-guard / Presidio (CPU) | PII masking + secrets/credential detection | AUDIT |
-| `classify` | PromptGuardGate | DeBERTa-v3 ONNX (CPU) | Injection & jailbreak classification | AUDIT |
-| `toxicity_in` | ToxicityInputGate | llm-guard HF classifiers (CPU) | Hostile tone / extreme negative sentiment | AUDIT |
-| `ban_topics` | BanTopicsGate | llm-guard DeBERTa zero-shot (CPU) | Operator-defined forbidden subject areas | AUDIT |
-| `mod_llm` | LlamaGuardGate | Llama Guard 3 via Ollama (LLM-as-a-judge) | Broad safety taxonomy — S1–S14 harm categories | AUDIT |
+| Layer | Key | Tool | Defense Target | Default |
+|:------|:----|:-----|:---------------|:--------|
+| L0 Static | `custom_regex` | Python regex | Hot-patch block phrases / WAF simulation | AUDIT |
+| L0 Static | `token_limit` | tiktoken | Prompt length — context exhaustion & injection hiding | ENFORCE |
+| L0 Static | `invisible_text` | Unicode Cf/Cc scan | Hidden Unicode steganography | ENFORCE |
+| L1 Pattern | `fast_scan` | Presidio + detect-secrets (CPU) | PII masking + secrets/credential detection | AUDIT |
+| L1 Pattern | `gibberish` | Gibberish-Detector HF (CPU) | Noise-flood and token-waste attacks | AUDIT |
+| L2 ML | `language_in` | XLM-RoBERTa (CPU) | Multilingual jailbreak bypass | AUDIT |
+| L2 ML | `classify` | protectai/DeBERTa-v3 (CPU) | Injection & jailbreak classification | AUDIT |
+| L2 ML | `toxicity_in` | RoBERTa HF classifiers (CPU) | Hostile tone / extreme negative sentiment | AUDIT |
+| L2 ML | `ban_topics` | DeBERTa zero-shot NLI (CPU) | Operator-defined forbidden subject areas | AUDIT |
+| L3 LLM | `semantic_guard` | Any Ollama model (configurable) | Intent-level threats, novel jailbreaks, social engineering | AUDIT |
+| L3 LLM | `little_canary` | qwen2.5:1.5b via Ollama | Behavioral injection probe — compromise residue detection | AUDIT |
+| L4 LLM | `mod_llm` | Llama Guard 3 via Ollama | Broad safety taxonomy — S1–S14 harm categories | AUDIT |
+| L5 Cloud | `airs_inlet` | Palo Alto AIRS API | URL/IP reputation, agent abuse, enterprise policy — fail-closed | AUDIT |
 
 ### Inference
 
@@ -41,18 +48,20 @@
 |:-|:-|:-|
 | **Target LLM** | Ollama (local) | Main generation task |
 
-### Output Gates
+### Output Gates — 8 gates
 
-| Key | Gate | Tool | Defense Target | Default Mode |
-|:----|:-----|:-----|:---------------|:-------------|
-| `sensitive_out` | SensitiveGate | Presidio (CPU) | PII the LLM generated itself | AUDIT |
-| `malicious_urls` | MaliciousURLsGate | Heuristic + llm-guard ML (CPU) | Phishing links & malware URLs in responses | ENFORCE |
-| `no_refusal` | NoRefusalGate | llm-guard classifier (CPU) | Model refusal detection (red-team signal) | AUDIT |
-| `bias_out` | BiasOutputGate | llm-guard classifiers (CPU) | Biased / toxic model output monitoring | AUDIT |
-| `relevance` | RelevanceGate | BAAI embeddings (CPU) | Off-topic responses & jailbreak drift | AUDIT |
-| `deanonymize` | DeanonymizeGate | llm-guard Vault (CPU) | Restore user PII placeholders in response | ENFORCE |
+| Layer | Key | Tool | Defense Target | Default |
+|:------|:----|:-----|:---------------|:--------|
+| O·ML | `sensitive_out` | Presidio (CPU) | PII the LLM generated itself | AUDIT |
+| O·ML | `malicious_urls` | Heuristic + ML classifier (CPU) | Phishing links & malware URLs in responses | ENFORCE |
+| O·ML | `no_refusal` | DistilRoBERTa (CPU) | Model refusal detection (red-team signal) | AUDIT |
+| O·ML | `bias_out` | DistilRoBERTa classifiers (CPU) | Biased / toxic model output monitoring | AUDIT |
+| O·ML | `relevance` | BAAI/bge embeddings (CPU) | Off-topic responses & jailbreak drift | AUDIT |
+| O·ML | `language_same` | XLM-RoBERTa (CPU) | Response language drift / multilingual jailbreak | AUDIT |
+| O·Static | `deanonymize` | Presidio Vault | Restore user PII placeholders in response | ENFORCE |
+| O·Cloud | `airs_dual` | Palo Alto AIRS API | Response DLP masking, URL cats, hallucination — fail-open | AUDIT |
 
-> **Phase 4 (partial):** Llama-Guard-3 (`mod_llm`) is implemented. Prisma AIRS (Cloud API) for enterprise DLP is upcoming.
+> **Cloud tier (L5) is optional.** Both AIRS gates degrade to SKIP when `AIRS_API_KEY` is not configured — all 20 local gates run fully offline.
 
 ---
 
@@ -62,11 +71,15 @@
 |:------|:-----------|
 | UI / Web Framework | [Streamlit](https://streamlit.io/) |
 | LLM Inference | [Ollama](https://ollama.com/) (local) |
-| Fast Scanning | [llm-guard](https://github.com/protectai/llm-guard) |
-| Injection Classifier | [Meta Prompt-Guard-86M](https://huggingface.co/meta-llama/Prompt-Guard-86M) via `transformers` + ONNX |
-| Safety Moderation LLM | `llama-guard3` via Ollama |
-| Cloud Scanning | [Palo Alto Prisma AIRS](https://www.paloaltonetworks.com/) |
-| Behavioral Probing | [little-canary](https://github.com/protectai/little-canary) |
+| PII / Secrets Detection | [Microsoft Presidio](https://github.com/microsoft/presidio) + detect-secrets |
+| ML Gate Library | [llm-guard](https://github.com/protectai/llm-guard) |
+| Injection Classifier | [protectai/deberta-v3-base-prompt-injection-v2](https://huggingface.co/protectai/deberta-v3-base-prompt-injection-v2) |
+| Language Detection | [papluca/xlm-roberta-base-language-detection](https://huggingface.co/papluca/xlm-roberta-base-language-detection) |
+| Relevance Embeddings | [BAAI/bge-base-en-v1.5](https://huggingface.co/BAAI/bge-base-en-v1.5) |
+| Safety Moderation LLM (L4) | `llama-guard3` via Ollama |
+| LLM Judge — General (L3) | Any Ollama model — recommended `shieldgemma:2b` |
+| Behavioral Canary (L3) | [little-canary](https://github.com/hermeslabs/little-canary) + `qwen2.5:1.5b` |
+| Cloud Scanning (L5, optional) | [Palo Alto Networks AIRS](https://www.paloaltonetworks.com/network-security/ai-runtime-security) |
 | Configuration | `config.yaml` + `.env` |
 | Persistence | SQLite via SQLAlchemy |
 
@@ -117,12 +130,13 @@ streamlit run app.py
 
 Copy `.env.example` to `.env` and fill in your values:
 
-| Variable | Description |
-|:---------|:------------|
-| `OLLAMA_HOST` | URL of the Ollama instance (default: `http://localhost:11434`) |
-| `PANW_API_KEY` | Palo Alto Networks AIRS API key |
+| Variable | Description | Required |
+|:---------|:------------|:---------|
+| `OLLAMA_HOST` | URL of the Ollama instance (default: `http://localhost:11434`) | Yes |
+| `AIRS_API_KEY` | Palo Alto Networks AIRS API key (`x-pan-token` from Strata Cloud Manager) | Only for L5 cloud gates |
+| `AIRS_PROFILE` | AIRS AI security profile name configured in Strata Cloud Manager | Only for L5 cloud gates |
 
-Edit `config.yaml` to set active model names, AIRS profile, and default gate thresholds.
+Edit `config.yaml` to set active model names and default gate thresholds. Both cloud gates degrade to SKIP when `AIRS_API_KEY` is absent — no change to `.env` is needed for local-only operation.
 
 ---
 
