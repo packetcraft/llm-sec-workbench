@@ -1,8 +1,8 @@
-# Agentic Security — Playground
+# Coding Agent Guard — Playground
 
-Hands-on exercises for the Agentic Security Monitor. Work through them in order — each exercise builds on the previous one.
+Hands-on exercises for the Coding Agent Guard. Work through them in order — each exercise builds on the previous one.
 
-**Prerequisites:** See the Agentic Security Setup section in [QUICKSTART.md](../QUICKSTART.md).
+**Prerequisites:** See the Coding Agent Guard Setup section in [QUICKSTART.md](../QUICKSTART.md).
 
 ---
 
@@ -90,7 +90,7 @@ python -c "import json, subprocess, sys; d={'session_id':'$SID','hook_event_name
 
 ### Exercise 7 — Gemini CLI Native Verification
 1. Run `streamlit run app.py`.
-2. Navigate to **🛡️ Agentic Security**.
+2. Navigate to **🛡️ Coding Agent Guard**.
 3. In this terminal (Gemini CLI), ask me to list files:
    > "Gemini, list the files in the audit/ directory."
 4. Verify the **Live Feed** tab:

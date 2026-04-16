@@ -876,6 +876,79 @@ def _render_sidebar(pipeline: "PipelineManager", config: dict) -> None:
                 "Requires FastScan to be active.",
             )
 
+        # ── CLOUD GATES ───────────────────────────────────────────────────────
+        with st.expander("Cloud Gates (AIRS)", expanded=False):
+            # Shared config — API key and profile used by both cloud gates
+            _airs_key_val = st.session_state.get("airs_api_key", "")
+            _airs_key_new = st.text_input(
+                "AIRS API key",
+                value=_airs_key_val,
+                type="password",
+                placeholder="x-pan-token — leave blank to use AIRS_API_KEY env var",
+                label_visibility="collapsed",
+                key="airs_api_key_input",
+                help=(
+                    "Palo Alto Networks AIRS x-pan-token.\n"
+                    "Leave blank to use AIRS_API_KEY or PANW_API_KEY from .env.\n"
+                    "Both cloud gates SKIP gracefully when no key is present."
+                ),
+            )
+            if _airs_key_new != _airs_key_val:
+                st.session_state.airs_api_key = _airs_key_new
+
+            _airs_profile_val = st.session_state.get("airs_profile", "default")
+            _airs_profile_new = st.text_input(
+                "AI security profile",
+                value=_airs_profile_val,
+                placeholder="default",
+                label_visibility="collapsed",
+                key="airs_profile_input",
+                help=(
+                    "AI security profile name configured in Strata Cloud Manager.\n"
+                    "Controls which threat categories AIRS evaluates."
+                ),
+            )
+            if _airs_profile_new.strip() != _airs_profile_val:
+                st.session_state.airs_profile = _airs_profile_new.strip() or "default"
+
+            # API key status indicator
+            _has_key = bool(st.session_state.get("airs_api_key", ""))
+            if _has_key:
+                st.markdown(
+                    "<div style='font-size:0.68rem;color:#9ECE6A;padding:2px 0'>"
+                    "✓ API key configured — cloud gates active when enabled</div>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(
+                    "<div style='font-size:0.68rem;color:#555566;padding:2px 0'>"
+                    "⚠ No API key — both gates will SKIP (set AIRS_API_KEY in .env)</div>",
+                    unsafe_allow_html=True,
+                )
+
+            st.markdown(
+                "<div style='margin:6px 0 3px;border-top:1px solid #2a2a3a'></div>",
+                unsafe_allow_html=True,
+            )
+
+            # AIRS Inlet gate row (last input gate — L5 cloud)
+            _gate_row(
+                "airs_inlet", "AIRS Inlet", "AUDIT",
+                "Palo Alto Networks AIRS cloud prompt scan (L5 — Cloud).\n"
+                "Covers URL/IP reputation, agent abuse, and cloud DLP policy.\n"
+                "FAIL-CLOSED: API errors block in ENFORCE mode.\n"
+                "Requires AIRS API key — SKIPs gracefully without one.",
+            )
+
+            # AIRS Dual gate row (last output gate — L5 cloud)
+            _gate_row(
+                "airs_dual", "AIRS Dual", "AUDIT",
+                "Palo Alto Networks AIRS cloud response scan + DLP masking (L5 — Cloud).\n"
+                "Scans the LLM response with the original prompt as context.\n"
+                "DLP masking: sensitive data replaced with AIRS-redacted version.\n"
+                "FAIL-OPEN: API errors log a metric but never suppress the response.",
+            )
+
         # ── GENERATION ────────────────────────────────────────────────────────
         _sb_section("GENERATION")
         with st.expander("Parameters", expanded=False):
@@ -1009,7 +1082,7 @@ def _render_chat_content(pipeline: "PipelineManager", config: dict, prompt: str 
                 if _h_metrics:
                     _h_notices = [
                         m for m in _h_metrics
-                        if m.get("verdict") == "BLOCK"
+                        if m.get("verdict") in {"BLOCK", "DLP_MASK"}
                         and m.get("gate_name") not in {
                             "token_limit", "invisible_text", "custom_regex", "deanonymize",
                         }
@@ -1389,6 +1462,60 @@ def _render_chat_content(pipeline: "PipelineManager", config: dict, prompt: str 
                         False,
                     ))
 
+                _ai = next(
+                    (m for m in payload.metrics
+                     if m.get("gate_name") == "airs_inlet" and m.get("verdict") == "BLOCK"),
+                    None,
+                )
+                if _ai:
+                    _notices.append((
+                        "☁️",
+                        "AIRS Inlet — cloud scan blocked this prompt",
+                        f"{_ai['detail']}  \n"
+                        "Palo Alto Networks AI Runtime Security evaluated this prompt against "
+                        "the configured AI security profile and returned action=block. "
+                        "The cloud scan covers URL reputation, IP reputation, agent system abuse, "
+                        "and policy-defined custom threat categories that local gates cannot check. "
+                        "Switch the gate to ENFORCE to hard-block such prompts before they reach "
+                        "the model.",
+                        True,
+                    ))
+
+                _ad = next(
+                    (m for m in payload.metrics
+                     if m.get("gate_name") == "airs_dual" and m.get("verdict") == "BLOCK"),
+                    None,
+                )
+                if _ad:
+                    _notices.append((
+                        "☁️",
+                        "AIRS Dual — cloud scan blocked this response",
+                        f"{_ad['detail']}  \n"
+                        "Palo Alto Networks AIRS evaluated the LLM response and returned "
+                        "action=block. The response has been suppressed (ENFORCE mode) or "
+                        "flagged (AUDIT mode). Cloud-side DLP, URL category, and content "
+                        "policies were evaluated against the full response text.",
+                        True,
+                    ))
+
+                _adm = next(
+                    (m for m in payload.metrics
+                     if m.get("gate_name") == "airs_dual" and m.get("verdict") == "DLP_MASK"),
+                    None,
+                )
+                if _adm:
+                    _notices.append((
+                        "🔐",
+                        "AIRS Dual — DLP masking applied to response",
+                        f"{_adm['detail']}  \n"
+                        "Palo Alto Networks AIRS detected sensitive data patterns in the response "
+                        "and replaced them with redacted placeholders. The response shown above "
+                        "is the AIRS-sanitised version — the original text was never displayed. "
+                        "No hard block was issued (action=allow); only the sensitive fields were "
+                        "masked per your AIRS DLP policy.",
+                        False,
+                    ))
+
                 _any_hard_block = any(n[3] for n in _notices)
                 _n_label = (
                     f"🔍 Security Scan Results ({len(_notices)} event{'s' if len(_notices) > 1 else ''})"
@@ -1466,11 +1593,12 @@ def _render_chat_content(pipeline: "PipelineManager", config: dict, prompt: str 
 # ── Semantic colour maps (Section 9.6) ────────────────────────────────────────
 
 _VERDICT_COLOR: dict[str, str] = {
-    "PASS":  "#9ECE6A",   # green
-    "BLOCK": "#F7768E",   # red
-    "AUDIT": "#E0AF68",   # amber  (BLOCK verdict in AUDIT mode)
-    "ERROR": "#FF9E64",   # orange — distinct from AUDIT amber
-    "SKIP":  "#555566",   # dim
+    "PASS":     "#9ECE6A",   # green
+    "BLOCK":    "#F7768E",   # red
+    "AUDIT":    "#E0AF68",   # amber  (BLOCK verdict in AUDIT mode)
+    "ERROR":    "#FF9E64",   # orange — distinct from AUDIT amber
+    "SKIP":     "#555566",   # dim
+    "DLP_MASK": "#BB9AF7",   # purple — AIRS DLP masking (data redacted, not blocked)
 }
 
 _MODE_COLOR: dict[str, str] = {
@@ -1487,11 +1615,12 @@ _MODE_BG: dict[str, str] = {
 
 # Emoji indicators for each gate verdict (used in post-message badge row)
 _VERDICT_EMOJI: dict[str, str] = {
-    "PASS":  "🟢",
-    "BLOCK": "🔴",
-    "AUDIT": "🟡",
-    "ERROR": "🟠",
-    "SKIP":  "⚫",
+    "PASS":     "🟢",
+    "BLOCK":    "🔴",
+    "AUDIT":    "🟡",
+    "ERROR":    "🟠",
+    "SKIP":     "⚫",
+    "DLP_MASK": "🔐",   # AIRS Dual — DLP masking applied without a hard block
 }
 
 # Short names for post-message badge row
@@ -1515,6 +1644,8 @@ _GATE_SHORT: dict[str, str] = {
     "relevance":      "Rel",
     "language_same":  "LangOut",
     "deanonymize":    "Deanon",
+    "airs_inlet":     "AIRS-In",
+    "airs_dual":      "AIRS-Out",
 }
 
 # Full names for pipeline banner details table
@@ -1538,6 +1669,8 @@ _GATE_LABEL: dict[str, str] = {
     "relevance":      "Relevance",
     "language_same":  "Language Match",
     "deanonymize":    "PII Restore",
+    "airs_inlet":     "AIRS Inlet",
+    "airs_dual":      "AIRS Dual",
 }
 
 

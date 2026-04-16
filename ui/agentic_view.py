@@ -1,11 +1,11 @@
 """
 ui/agentic_view.py
 ──────────────────
-Streamlit view for the Agentic Security Monitor.
+Streamlit view for the Coding Agent Guard.
 
 Public entry point
 ------------------
-render(config)   Called by app.py when the user navigates to Agentic Security.
+render(config)   Called by app.py when the user navigates to Coding Agent Guard.
 
 Three tabs
 ----------
@@ -526,48 +526,84 @@ def _render_dashboard(audit_path: str) -> None:
 def _render_how_it_works() -> None:
     st.markdown("### Architecture Overview")
     st.info(
-        "The Agentic Security Monitor is a real-time middleware layer that intercepts "
+        "The Coding Agent Guard is a real-time middleware layer that intercepts "
         "AI tool calls from **Claude Code** and **Gemini CLI**. It applies a "
         "**Hybrid Funnel** — cheap deterministic checks first, expensive LLM last — "
         "to reach a verdict with sub-500ms latency."
     )
 
 
-    # LR layout keeps the funnel horizontal and fits within a fixed-height iframe.
-    # \\n is not reliable in all Mermaid versions — use plain labels.
-    mermaid_code = """
-    graph LR
-        A([Claude / Gemini]) -->|Tool JSON| B(agentic_guard.py)
-        B --> C{ALLOWLIST?}
-        C -->|Bash read-only| AL([ALLOWLISTED - 0ms])
-        C -->|no match| D{PATH?}
-        D -->|protected file| PA([BLOCK - 0ms])
-        D -->|safe| E{REGEX?}
-        E -->|IPI signature| RE([BLOCK - 0ms])
-        E -->|no match| F[Pre-process]
-        F --> G{LLM}
-        G -->|verdict| LV([ALLOW / BLOCK])
-        AL --> H[(audit JSONL)]
-        PA --> H
-        RE --> H
-        LV --> H
-    """
+    # Pure HTML/CSS decision-funnel diagram — no external JS dependencies.
+    # st.html() iframes block CDN script imports, so Mermaid cannot be used here.
+    _C = "<div style='width:2px;height:12px;background:#2a2a4a;margin:0 auto'></div>"
+    _ARR = "<div style='text-align:center;color:#3a3a6a;font-size:1rem;line-height:1;margin:-2px 0'>&#9660;</div>"
 
-    st.html(
-        f"""
-        <div class="mermaid" style="display:flex;justify-content:center;">
-            {mermaid_code}
-        </div>
-        <script type="module">
-            import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
-            mermaid.initialize({{
-                startOnLoad: true,
-                theme: 'dark',
-                flowchart: {{ useMaxWidth: true, htmlLabels: true, curve: 'basis' }}
-            }});
-        </script>
-        """
+    def _step(label: str, sublabel: str, latency: str,
+              exit_label: str, exit_text: str, exit_color: str,
+              border: str, text_color: str, bg: str) -> str:
+        return (
+            "<div style='display:flex;align-items:center;gap:8px;width:100%'>"
+            f"<div style='flex:1;background:{bg};border:1px solid {border};"
+            "border-radius:8px;padding:9px 14px'>"
+            f"<div style='font-weight:700;color:{text_color};font-size:0.8rem'>{label}</div>"
+            f"<div style='color:#888;font-size:0.7rem;margin-top:1px'>{sublabel}</div>"
+            f"<div style='color:#7AA2F7;font-size:0.65rem;font-family:monospace'>{latency}</div>"
+            "</div>"
+            "<div style='display:flex;flex-direction:column;align-items:center;"
+            "gap:2px;min-width:110px'>"
+            f"<div style='font-size:0.6rem;color:#555;white-space:nowrap'>{exit_label}</div>"
+            "<div style='width:40px;height:1px;background:#3a3a5a'></div>"
+            f"<div style='background:{exit_color}22;color:{exit_color};padding:2px 8px;"
+            "border-radius:4px;font-size:0.65rem;font-weight:700;white-space:nowrap;"
+            f"border:1px solid {exit_color}44'>{exit_text}</div>"
+            "</div>"
+            "</div>"
+        )
+
+    def _endpoint(text: str, color: str) -> str:
+        return (
+            f"<div style='background:#1e1e2e;border:2px solid {color};border-radius:20px;"
+            f"padding:7px 22px;color:{color};font-weight:700;font-size:0.82rem;"
+            "text-align:center;margin:0 auto'>"
+            f"{text}</div>"
+        )
+
+    _diagram_html = (
+        "<div style='display:flex;justify-content:center;padding:8px 0'>"
+        "<div style='display:flex;flex-direction:column;align-items:stretch;"
+        "width:min(560px,100%)'>"
+        + _endpoint("Claude / Gemini — Tool Call (JSON)", "#56B6C2")
+        + _C + _ARR
+        + _endpoint("agentic_guard.py", "#7AA2F7")
+        + _C + _ARR
+        + _step(
+            "ALLOWLIST check", "Safe bash read-only commands", "0 ms",
+            "match &#8594;", "ALLOWLISTED", "#9ECE6A",
+            "#2d4a2d", "#9ECE6A", "#0e1e0e",
+        )
+        + _C + _ARR
+        + _step(
+            "PATH check", "Protected file & directory patterns", "0 ms",
+            "protected &#8594;", "BLOCK", "#F7768E",
+            "#1a2a4a", "#7AA2F7", "#0a1020",
+        )
+        + _C + _ARR
+        + _step(
+            "REGEX check", "IPI signature pattern library", "0 ms",
+            "signature &#8594;", "BLOCK", "#F7768E",
+            "#1a2a4a", "#7AA2F7", "#0a1020",
+        )
+        + _C + _ARR
+        + _step(
+            "LLM Judge", "Ollama — contextual intent analysis", "~500 ms",
+            "verdict &#8594;", "ALLOW / BLOCK", "#BB9AF7",
+            "#2a1a4a", "#BB9AF7", "#120a20",
+        )
+        + _C + _ARR
+        + _endpoint("audit/{session_id}.jsonl — all verdicts logged", "#555566")
+        + "</div></div>"
     )
+    st.html(_diagram_html)
 
     # ── Guard pipelines ───────────────────────────────────────────────────────
     st.divider()
@@ -685,11 +721,11 @@ def _render_how_it_works() -> None:
 # ── Public entry point ────────────────────────────────────────────────────────
 
 def render(config: dict) -> None:
-    """Main entry point called by app.py for the Agentic Security view."""
+    """Main entry point called by app.py for the Coding Agent Guard view."""
     agentic_cfg = config.get("agentic", {})
     audit_path  = str(agentic_cfg.get("audit_path", "./audit"))
 
-    st.markdown("## Agentic Security Monitor")
+    st.markdown("## 🛡️ Coding Agent Guard")
     st.caption(
         "Inspect and audit Claude Code and Gemini CLI hook events. "
         "Records are written to `audit/{session_id}.jsonl` by `hooks/agentic_guard.py`. "

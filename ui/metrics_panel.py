@@ -56,21 +56,23 @@ _C_TEXT   = "#cdd6f4"
 _C_LABEL  = "#888888"
 
 _VERDICT_COLORS = {
-    "PASS":  _C_GREEN,
-    "BLOCK": _C_RED,
-    "AUDIT": _C_AMBER,
-    "ERROR": _C_ERROR,   # orange, not amber — distinct from AUDIT
-    "SKIP":  _C_DIM,
+    "PASS":     _C_GREEN,
+    "BLOCK":    _C_RED,
+    "AUDIT":    _C_AMBER,
+    "ERROR":    _C_ERROR,    # orange, not amber — distinct from AUDIT
+    "SKIP":     _C_DIM,
+    "DLP_MASK": _C_PURPLE,   # AIRS Dual — DLP masking applied without a hard block
 }
 
 _SPARK_CHARS = "▁▂▃▄▅▆▇█"
 
 _VERDICT_EMOJI: dict[str, str] = {
-    "PASS":  "🟢",
-    "BLOCK": "🔴",
-    "ERROR": "🟠",
-    "SKIP":  "⚫",
-    "AUDIT": "🟡",
+    "PASS":     "🟢",
+    "BLOCK":    "🔴",
+    "ERROR":    "🟠",
+    "SKIP":     "⚫",
+    "AUDIT":    "🟡",
+    "DLP_MASK": "🔐",   # AIRS Dual — DLP masking applied without a hard block
 }
 
 # Gate emoji map — used by render_gate_chip_trace()
@@ -79,16 +81,23 @@ _GATE_EMOJI: dict[str, str] = {
     "token_limit":    "📏",
     "invisible_text": "👻",
     "fast_scan":      "🔍",
+    "gibberish":      "🔡",
+    "language_in":    "🌍",
     "classify":       "🎯",
     "toxicity_in":    "☣️",
     "ban_topics":     "🚫",
+    "semantic_guard": "🧩",
+    "little_canary":  "🐦",
     "mod_llm":        "🛡️",
+    "airs_inlet":     "☁️",
     "sensitive_out":  "🔒",
     "malicious_urls": "🌐",
     "no_refusal":     "🤐",
     "bias_out":       "⚖️",
     "relevance":      "📎",
+    "language_same":  "🗣️",
     "deanonymize":    "🔓",
+    "airs_dual":      "☁️",
 }
 
 

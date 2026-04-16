@@ -1,6 +1,6 @@
-# Agentic Security — Architecture Reference
+# Coding Agent Guard — Architecture Reference
 
-This document provides the technical specification for the Agentic Security Monitor. For the project goals and roadmap, see [PLAN.md](PLAN.md).
+This document provides the technical specification for the Coding Agent Guard. For the project goals and roadmap, see [PLAN.md](PLAN.md).
 
 ---
 

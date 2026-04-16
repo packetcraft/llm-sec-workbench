@@ -199,11 +199,11 @@ By default, all gates start in `AUDIT` mode. You can change each gate independen
 
 ---
 
-## Agentic Security Setup
+## Coding Agent Guard Setup
 
-The Agentic Security Monitor intercepts Claude Code tool calls (Bash, Edit, Write, WebFetch) using Claude Code hook events, classifies them with a local Ollama guard model, and writes structured audit records to `audit/`. The dedicated **Agentic Security** view in the app lets you review and query the full audit history.
+The Coding Agent Guard intercepts Claude Code and Gemini CLI tool calls (Bash, Edit, Write, WebFetch) using hook events, classifies them with a local Ollama guard model, and writes structured audit records to `audit/`. The dedicated **🛡️ Coding Agent Guard** view in the app lets you review and query the full audit history.
 
-> This setup is **independent of the main chatbot pipeline**. You do not need the chatbot models pulled or Ollama running for the Agentic Security UI — it reads from local JSONL files only.
+> This setup is **independent of the main chatbot pipeline**. You do not need the chatbot models pulled or Ollama running for the Coding Agent Guard UI — it reads from local JSONL files only.
 
 ### Step A — Pull the Guard Model
 
@@ -302,13 +302,13 @@ with open(fname) as f:
 
 The first line should be `SESSION_START` followed by `TOOL_CALL` records with verdicts of `ALLOWLISTED`, `ALLOW`, `BLOCK`, or `ERROR`.
 
-### Step E — Open the Agentic Security View
+### Step E — Open the Coding Agent Guard View
 
 ```bash
 streamlit run app.py
 ```
 
-Navigate to **Agentic Security** in the sidebar. Three tabs:
+Navigate to **🛡️ Coding Agent Guard** in the sidebar. Three tabs:
 
 | Tab | Purpose |
 |:----|:--------|
@@ -316,7 +316,7 @@ Navigate to **Agentic Security** in the sidebar. Three tabs:
 | **Audit Explorer** | Filter by session, tool, verdict, date, keyword — click rows for detail |
 | **Dashboard** | Aggregate KPIs, block rate trend, latency histogram, session timeline |
 
-### Agentic Security Troubleshooting
+### Coding Agent Guard Troubleshooting
 
 **`audit/` directory is empty after a Claude Code session**
 - Confirm `.claude/settings.json` exists and contains the hook matchers.

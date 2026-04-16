@@ -31,16 +31,48 @@ _DEFAULT_MODES: dict[str, str] = {
     "token_limit":    "ENFORCE",
     "invisible_text": "ENFORCE",
     "fast_scan":      "AUDIT",
+    "gibberish":      "AUDIT",
+    "language_in":    "AUDIT",
     "classify":       "AUDIT",
     "toxicity_in":    "AUDIT",
     "ban_topics":     "AUDIT",
+    "semantic_guard": "AUDIT",
+    "little_canary":  "AUDIT",
     "mod_llm":        "AUDIT",
+    "airs_inlet":     "AUDIT",
     "sensitive_out":  "AUDIT",
     "malicious_urls": "ENFORCE",
     "no_refusal":     "AUDIT",
     "bias_out":       "AUDIT",
     "relevance":      "AUDIT",
+    "language_same":  "AUDIT",
     "deanonymize":    "ENFORCE",
+    "airs_dual":      "AUDIT",
+}
+
+# Layer assignment for Gate Reference table
+_LAYER_MAP: dict[str, str] = {
+    "custom_regex":   "L0",
+    "token_limit":    "L0",
+    "invisible_text": "L0",
+    "fast_scan":      "L1",
+    "gibberish":      "L1",
+    "language_in":    "L2",
+    "classify":       "L2",
+    "toxicity_in":    "L2",
+    "ban_topics":     "L2",
+    "semantic_guard": "L3",
+    "little_canary":  "L3",
+    "mod_llm":        "L4",
+    "airs_inlet":     "L5",
+    "sensitive_out":  "O·ML",
+    "malicious_urls": "O·ML",
+    "no_refusal":     "O·ML",
+    "bias_out":       "O·ML",
+    "relevance":      "O·ML",
+    "language_same":  "O·ML",
+    "deanonymize":    "O·Static",
+    "airs_dual":      "O·Cloud",
 }
 
 
@@ -55,8 +87,10 @@ def render() -> None:
     st.info(
         "The **LLM Security Workbench** is a local-first research and testing environment "
         "for understanding, probing, and defending AI language model deployments. "
-        "Every prompt and response passes through a configurable **14-gate security pipeline** "
-        "— all processing stays on your machine, nothing leaves to external services."
+        "Every prompt and response passes through a configurable **22-gate, 6-layer security pipeline**. "
+        "Layers L0–L4 run entirely on your machine. "
+        "The optional **Layer 5 Cloud** tier (AIRS Inlet + AIRS Dual) degrades to SKIP when no API key "
+        "is configured — all local processing remains offline."
     )
 
     c1, c2, c3, c4 = st.columns(4)
@@ -72,7 +106,7 @@ def render() -> None:
 
     with c2:
         with st.container(border=True):
-            st.markdown("##### 🛡️ Agentic Security")
+            st.markdown("##### 🛡️ Coding Agent Guard")
             st.write(
                 "Monitor and audit tool calls from **Claude Code** and **Gemini CLI** "
                 "via hook interception. Every tool call is classified — ALLOWLIST, PATH, "
@@ -93,10 +127,16 @@ def render() -> None:
             st.markdown("##### 📦 Prerequisites")
             st.write(
                 "Chat Workbench and Red Teaming require **Ollama** running locally with "
-                "your target model and `llama-guard3` pulled. "
-                "Agentic Security and this page work without Ollama."
+                "your target model, `llama-guard3`, and the LLM judge/canary models pulled. "
+                "The optional AIRS cloud gates require an `AIRS_API_KEY` in `.env`. "
+                "Coding Agent Guard and this page work without Ollama."
             )
-            st.caption("`ollama pull llama3`\n`ollama pull llama-guard3`")
+            st.caption(
+                "`ollama pull llama3`\n"
+                "`ollama pull llama-guard3`\n"
+                "`ollama pull shieldgemma:2b`\n"
+                "`ollama pull qwen2.5:1.5b`"
+            )
 
     # ── 1. Pipeline architecture ──────────────────────────────────────────────
     st.divider()
@@ -107,28 +147,116 @@ def render() -> None:
         "before you see it. A single ENFORCE gate in BLOCK state halts the pipeline immediately."
     )
 
-    pipeline_diagram = """
-    graph LR
-        A([User Prompt]) --> B[Input Gates x8]
-        B -->|BLOCK| C([Pipeline Halted])
-        B -->|all pass| D[LLM Inference]
-        D --> E[Output Gates x6]
-        E -->|BLOCK| F([Response Blocked])
-        E -->|all pass| G([Response Delivered])
-    """
+    # Pure HTML/CSS pipeline diagram — no external JS dependencies.
+    # Mermaid requires external CDN which is blocked inside st.html() iframes.
+    def _layer_card(
+        label: str,
+        latency: str,
+        gates: str,
+        border_color: str,
+        label_color: str,
+        bg_color: str,
+        badge: str = "",
+        badge_color: str = "#555",
+    ) -> str:
+        badge_html = (
+            f"<span style='background:{badge_color}22;color:{badge_color};"
+            f"padding:1px 7px;border-radius:4px;font-size:0.65rem;font-weight:700;"
+            f"margin-left:8px'>{badge}</span>"
+            if badge else ""
+        )
+        return (
+            f"<div style='display:flex;align-items:stretch;gap:6px;width:100%'>"
+            f"<div style='flex:1;background:{bg_color};border:1px solid {border_color};"
+            f"border-radius:8px;padding:10px 16px'>"
+            f"<div style='font-weight:700;color:{label_color};font-size:0.82rem'>"
+            f"{label}{badge_html}</div>"
+            f"<div style='color:#7AA2F7;font-size:0.68rem;font-family:monospace;"
+            f"margin:2px 0'>{latency}</div>"
+            f"<div style='color:#888;font-size:0.72rem'>{gates}</div>"
+            f"</div>"
+            f"<div style='display:flex;align-items:center;padding:0 4px'>"
+            f"<span style='color:#F7768E;font-size:0.65rem;font-weight:700;"
+            f"white-space:nowrap'>&#8594; BLOCK</span>"
+            f"</div>"
+            f"</div>"
+        )
+
+    _connector = (
+        "<div style='width:2px;height:14px;background:#2a2a4a;"
+        "margin:0 auto'></div>"
+    )
+    _arrow = (
+        "<div style='text-align:center;color:#3a3a6a;font-size:1rem;"
+        "line-height:1;margin:-2px 0'>&#9660;</div>"
+    )
+    _endpoint = lambda text, color: (  # noqa: E731
+        f"<div style='background:#1e1e2e;border:2px solid {color};"
+        f"border-radius:20px;padding:7px 22px;color:{color};"
+        f"font-weight:700;font-size:0.82rem;text-align:center;"
+        f"margin:0 auto'>{text}</div>"
+    )
+    _divider_bar = (
+        "<div style='width:100%;margin:8px 0;padding:8px 16px;"
+        "background:#16213e;border:1px solid #2a3a5a;border-radius:8px;"
+        "text-align:center;color:#56B6C2;font-weight:700;font-size:0.82rem;"
+        "letter-spacing:0.05em'>&#9866; LLM Inference &#9866;</div>"
+    )
+
+    _cards = [
+        # Input layers
+        _endpoint("User Prompt", "#cdd6f4"),
+        _connector, _arrow,
+        _layer_card("L0 — Pre-flight", "< 1 ms",
+                    "Regex Hot-Patch · Token Limit · Invisible Text",
+                    "#2d4a2d", "#9ECE6A", "#0e1e0e"),
+        _connector, _arrow,
+        _layer_card("L1 — Pattern Scanning", "1 – 10 ms",
+                    "PII / Secrets · Gibberish Detect",
+                    "#1a2a4a", "#7AA2F7", "#0a1020"),
+        _connector, _arrow,
+        _layer_card("L2 — ML Classifiers", "50 – 500 ms",
+                    "Language Enforce · Injection Detect · Toxicity · Ban Topics",
+                    "#1a2a4a", "#7AA2F7", "#0a1020"),
+        _connector, _arrow,
+        _layer_card("L3 — LLM Judge: General", "0.5 – 3 s",
+                    "Semantic Guard · Little Canary",
+                    "#2a1a4a", "#BB9AF7", "#120a20"),
+        _connector, _arrow,
+        _layer_card("L4 — LLM Judge: Specialised", "1 – 10 s",
+                    "Llama Guard 3",
+                    "#2a1a4a", "#BB9AF7", "#120a20"),
+        _connector, _arrow,
+        _layer_card("L5 — Cloud", "0.5 – 2 s",
+                    "AIRS Inlet ☁",
+                    "#3a2a0a", "#FFB86C", "#1a1200",
+                    badge="optional", badge_color="#FFB86C"),
+        _connector,
+        _divider_bar,
+        _connector, _arrow,
+        # Output layers
+        _layer_card("Output — ML Scanners", "50 – 500 ms",
+                    "PII Out · URLs · Refusal · Bias · Relevance · Lang Match",
+                    "#1a2a4a", "#7AA2F7", "#0a1020"),
+        _connector, _arrow,
+        _layer_card("Output — Post-process", "< 1 ms",
+                    "PII Restore",
+                    "#2d4a2d", "#9ECE6A", "#0e1e0e"),
+        _connector, _arrow,
+        _layer_card("Output — Cloud", "0.5 – 2 s",
+                    "AIRS Dual ☁",
+                    "#3a2a0a", "#FFB86C", "#1a1200",
+                    badge="optional", badge_color="#FFB86C"),
+        _connector, _arrow,
+        _endpoint("Response Delivered", "#9ECE6A"),
+    ]
+
     st.html(
-        f"""
-        <div class="mermaid" style="display:flex;justify-content:center;">
-            {pipeline_diagram}
-        </div>
-        <script type="module">
-            import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
-            mermaid.initialize({{
-                startOnLoad: true, theme: 'dark',
-                flowchart: {{ useMaxWidth: true, htmlLabels: true, curve: 'basis' }}
-            }});
-        </script>
-        """
+        "<div style='display:flex;justify-content:center;padding:8px 0'>"
+        "<div style='display:flex;flex-direction:column;align-items:stretch;"
+        "width:min(560px,100%)'>"
+        + "".join(_cards)
+        + "</div></div>"
     )
 
     # ── 2. Detection method types ─────────────────────────────────────────────
@@ -144,17 +272,25 @@ def render() -> None:
         "ml": (
             "Local Hugging Face and Presidio models running on CPU. "
             "First call loads the model into RAM; subsequent calls are fast. "
-            "Used for PII/Secrets, Injection Detect, Toxicity, Ban Topics, and output gates."
+            "Used for PII/Secrets, Gibberish, Injection Detect, Toxicity, Ban Topics, and all output ML gates."
         ),
         "llm": (
-            "Full Ollama LLM inference. Requires `llama-guard3` to be pulled. "
-            "Slowest but most contextually aware — evaluates 14 harm categories (S1–S14). "
-            "Placed last in the input chain so it only runs when all cheaper gates pass."
+            "Full Ollama LLM inference. Covers two sub-tiers: "
+            "L3 General judges (Semantic Guard with editable policy + Little Canary behavioral probe) "
+            "and L4 Specialised (Llama Guard 3, fixed S1–S14 taxonomy). "
+            "Placed after all ML gates so Ollama calls only run when cheaper checks pass."
+        ),
+        "cloud": (
+            "Outbound call to Palo Alto Networks AI Runtime Security (AIRS). "
+            "Requires an API key and internet access. Covers URL/IP reputation, enterprise DLP policy, "
+            "and threat intelligence not available locally. "
+            "Both cloud gates degrade to SKIP when no key is configured — "
+            "all local layers (L0–L4) run unaffected."
         ),
     }
 
-    d1, d2, d3 = st.columns(3)
-    for col, (key, (label, color)) in zip([d1, d2, d3], METHOD_STYLES.items()):
+    d1, d2, d3, d4 = st.columns(4)
+    for col, (key, (label, color)) in zip([d1, d2, d3, d4], METHOD_STYLES.items()):
         with col:
             with st.container(border=True):
                 st.markdown(f"**{label}**")
@@ -190,16 +326,19 @@ def render() -> None:
         # separator row before first output gate
         if key == "sensitive_out":
             rows_html += (
-                "<tr><td colspan='6' style='padding:4px 12px 2px;border:none'>"
+                "<tr><td colspan='7' style='padding:4px 12px 2px;border:none'>"
                 "<div style='font-size:0.62rem;font-weight:700;letter-spacing:0.08em;"
                 "text-transform:uppercase;color:#555566;border-top:1px solid #2a2a3a;"
                 "padding-top:10px;margin-top:4px'>Output Gates</div></td></tr>"
             )
 
+        layer     = _LAYER_MAP.get(key, "")
         rows_html += (
             "<tr style='border-bottom:1px solid #1e1e2e'>"
             f"<td style='padding:10px 12px;font-weight:700;color:#cdd6f4;white-space:nowrap'>"
             f"{info['label']}</td>"
+            f"<td style='padding:10px 8px;white-space:nowrap'>"
+            f"{_badge(layer, _METHOD_COLOR[method_key])}</td>"
             f"<td style='padding:10px 8px'>{_badge(cat, _TYPE_COLOR[cat])}</td>"
             f"<td style='padding:10px 8px'>"
             f"{_badge(_METHOD_LABEL[method_key], _METHOD_COLOR[method_key])}</td>"
@@ -228,7 +367,7 @@ def render() -> None:
                 background:rgba(158,206,106,0.06)'>Input Gates</div>
           <table class='gate-table'>
             <thead><tr>
-              <th>Gate</th><th>Type</th><th>Method</th>
+              <th>Gate</th><th>Layer</th><th>Type</th><th>Method</th>
               <th>Latency</th><th>Default</th><th>Description</th>
             </tr></thead>
             <tbody>{rows_html}</tbody>
@@ -347,24 +486,51 @@ def render() -> None:
 
     funnel = [
         (
-            "1 — Static / Rules",
+            "L0 — Pre-flight",
             "< 1 ms each",
-            "Regex Hot-Patch · Token Limit · Invisible Text · PII Restore",
-            "Pure Python. Run first — eliminate obvious bad inputs before any model is loaded.",
+            "Regex Hot-Patch · Token Limit · Invisible Text",
+            "Pure Python — no model loading, no GPU. Run first to eliminate obvious bad inputs "
+            "before any dependencies are touched. Always-on regardless of hardware.",
         ),
         (
-            "2 — ML Models (CPU)",
-            "5 ms – 500 ms",
-            "PII/Secrets · Injection Detect · Toxicity · Ban Topics · PII Out · Bad URLs · Refusal · Bias · Relevance",
-            "Local Hugging Face / Presidio models. Run only if cheaper gates pass. "
-            "First call warms the model; subsequent calls are significantly faster.",
+            "L1 — Pattern Scanning",
+            "1 – 10 ms",
+            "PII / Secrets · Gibberish Detect",
+            "Static ML (Presidio NER + detect-secrets + small HuggingFace classifier). "
+            "No GPU needed. Catches structured data leaks and noise-flood attacks "
+            "before heavier models load.",
         ),
         (
-            "3 — LLM / Ollama",
-            "1 s – 10 s",
+            "L2 — ML Classifiers",
+            "50 – 500 ms",
+            "Language Enforce · Injection Detect · Toxicity · Ban Topics",
+            "Local HuggingFace CPU models. First call loads the model into RAM; "
+            "subsequent calls are significantly faster. Covers multilingual bypass, "
+            "injection patterns, hostile tone, and topic scope.",
+        ),
+        (
+            "L3 — LLM Judge: General",
+            "0.5 – 3 s",
+            "Semantic Guard · Little Canary",
+            "Configurable Ollama judge with an editable safety prompt, plus a behavioral canary probe. "
+            "Catches intent-level threats and novel jailbreaks that fixed classifier datasets have never seen. "
+            "Runs before Llama Guard because smaller models (shieldgemma:2b, qwen2.5:1.5b) are faster.",
+        ),
+        (
+            "L4 — LLM Judge: Specialised",
+            "1 – 10 s",
             "Llama Guard 3",
-            "Highest accuracy, highest cost. Runs last in the input chain so it only "
-            "evaluates prompts that already cleared all cheaper gates.",
+            "Fixed MLCommons S1–S14 harm taxonomy. Highest local accuracy — placed last in the local "
+            "chain so it only evaluates prompts that cleared all cheaper gates. "
+            "Requires `ollama pull llama-guard3`.",
+        ),
+        (
+            "L5 — Cloud (optional)",
+            "0.5 – 2 s",
+            "AIRS Inlet",
+            "Palo Alto Networks AI Runtime Security. Adds URL/IP reputation and enterprise DLP policy "
+            "that cannot be replicated locally. Placed last — cloud round-trip cost is only paid when "
+            "all local gates (L0–L4) pass. Degrades to SKIP when no AIRS_API_KEY is configured.",
         ),
     ]
 

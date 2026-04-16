@@ -1,6 +1,6 @@
-# Agentic Security — Adversarial Analysis
+# Coding Agent Guard — Adversarial Analysis
 
-This document catalogues known bypass techniques against the Agentic Security Monitor,
+This document catalogues known bypass techniques against the Coding Agent Guard,
 maps them to threat frameworks, and provides a hardening playbook.
 
 For architecture details see [ARCHITECTURE.md](ARCHITECTURE.md).

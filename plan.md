@@ -22,8 +22,8 @@ Guards a conventional LLM chatbot with a multi-stage input/output security pipel
 
 ---
 
-### 2. Agentic Security
-Monitors and audits Claude Code (AI agent) tool calls using Claude Code hook events and local Ollama guard models.
+### 2. Coding Agent Guard
+Monitors and audits Claude Code and Gemini CLI tool calls using hook events and local Ollama guard models.
 **Threat model:** a *compromised or manipulated agent* taking unsafe actions on the host system.
 
 | Document | Purpose |

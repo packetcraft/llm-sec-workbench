@@ -1,6 +1,6 @@
 # Gate Expansion & Architecture Plan
 
-> **Status:** Planning — not yet implemented.
+> **Status:** In Progress — items 1–4 complete, items 5–6 pending.
 > **Based on:** Review of `GATE-LLM-GUARD.md`, `GATE-SEMANTIC-GUARD.md`, `GATE-LITTLE-CANARY.md`, `GATE-AIRS.md` against the current 14-gate pipeline in `gates/local_scanners.py` and `gates/ollama_gates.py`.
 
 ---
@@ -226,26 +226,26 @@ Output Layer 3 — Cloud            0.5–2 s      AIRS cloud API, requires API 
 
 | Gate | Status | Source | Layer | Effort |
 |---|---|---|---|---|
-| Gibberish | **Missing** | GATE-LLM-GUARD.md | Input ML | Low — already in llm-guard package |
-| Language (input) | **Missing** | GATE-LLM-GUARD.md | Input ML | Low — shared model with LanguageSame |
-| LanguageSame (output) | **Missing** | GATE-LLM-GUARD.md | Output ML | Low — shared model with Language |
-| Semantic Guard | **Missing** | GATE-SEMANTIC-GUARD.md | Input LLM Judge — General | Medium — new OllamaGate with configurable prompt |
-| Little Canary | **Missing** | GATE-LITTLE-CANARY.md | Input LLM Judge — General | Medium — `pip install little-canary`, thin wrapper |
-| AIRS-Inlet | **Missing** | GATE-AIRS.md | Input Cloud | Medium — new CloudGate subclass + API key required |
-| AIRS-Dual | **Missing** | GATE-AIRS.md | Output Cloud | Medium — paired with Inlet, DLP masking logic |
+| Gibberish | ✅ **Done** (2026-04-15) | GATE-LLM-GUARD.md | Input ML | Low — already in llm-guard package |
+| Language (input) | ✅ **Done** (2026-04-15) | GATE-LLM-GUARD.md | Input ML | Low — shared model with LanguageSame |
+| LanguageSame (output) | ✅ **Done** (2026-04-15) | GATE-LLM-GUARD.md | Output ML | Low — shared model with Language |
+| Semantic Guard | ✅ **Done** (2026-04-16) | GATE-SEMANTIC-GUARD.md | Input LLM Judge — General | Medium — new OllamaGate with configurable prompt |
+| Little Canary | ✅ **Done** (2026-04-16) | GATE-LITTLE-CANARY.md | Input LLM Judge — General | Medium — `pip install little-canary`, thin wrapper |
+| AIRS-Inlet | ✅ **Done** (2026-04-16) | GATE-AIRS.md | Input Cloud | Medium — new CloudGate subclass + API key required |
+| AIRS-Dual | ✅ **Done** (2026-04-16) | GATE-AIRS.md | Output Cloud | Medium — paired with Inlet, DLP masking logic |
 | Architecture re-layering | **Restructure** | All docs | howto_view + PipelineManager | Low — rename/reorder, no logic change |
 
 ---
 
 ## Recommended Priority Order
 
-1. **Gibberish + Language + LanguageSame** — lowest effort, zero new dependencies, closes obvious gaps in the ML tier. All three models are already bundled with `llm-guard`.
+1. ✅ **Gibberish + Language + LanguageSame** *(Done — 2026-04-15)* — lowest effort, zero new dependencies, closes obvious gaps in the ML tier. All three models are already bundled with `llm-guard`.
 
-2. **Semantic Guard** — high research and educational value. Demonstrates the LLM-as-judge pattern with a user-editable policy prompt. Complements Llama Guard with a customizable, domain-specific dimension. Implemented as a new `OllamaGate` subclass using the existing `LlamaGuardGate` structure as a template.
+2. ✅ **Semantic Guard** *(Done — 2026-04-16)* — high research and educational value. Demonstrates the LLM-as-judge pattern with a user-editable policy prompt. Complements Llama Guard with a customizable, domain-specific dimension. Implemented as a new `OllamaGate` subclass using the existing `LlamaGuardGate` structure as a template. Default judge model: `shieldgemma:2b`.
 
-3. **Little Canary** — most novel addition conceptually. Demonstrates a fundamentally different detection philosophy (behavioral probe vs. trained classifier). The `little-canary` library is mature; a thin `SecurityGate` wrapper calling it inline is the simplest path — no separate sidecar needed for a local Streamlit app.
+3. ✅ **Little Canary** *(Done — 2026-04-16)* — most novel addition conceptually. Demonstrates a fundamentally different detection philosophy (behavioral probe vs. trained classifier). The `little-canary` library is mature; a thin `SecurityGate` wrapper calling it inline is the simplest path — no separate sidecar needed for a local Streamlit app. Recommended canary model `qwen2.5:1.5b` auto-selected and pulled by setup/start scripts.
 
-4. **AIRS-Inlet + AIRS-Dual** — adds the cloud tier. Requires an API key and outbound HTTPS to Palo Alto Networks. Best scoped as an optional paired gate group: when no `AIRS_API_KEY` is configured, both gates degrade gracefully to SKIP without error. The SDK sidecar (`pan-aisecurity`, port :5003) can be added for batch Red Teaming performance (5 parallel workers vs. sequential REST calls).
+4. ✅ **AIRS-Inlet + AIRS-Dual** *(Done — 2026-04-16)* — adds the cloud tier. Both gates degrade gracefully to SKIP when no `AIRS_API_KEY` is configured. `AIRSInletGate` is fail-closed (API errors block in ENFORCE mode); `AIRSDualGate` is fail-open. DLP masking: when AIRS Dual returns `response_masked_data`, the response shown to the user is the AIRS-redacted version (recorded as `DLP_MASK` verdict in gate trace). API key and profile configurable via sidebar or `.env`.
 
 5. **Architecture re-layering** — can be done incrementally alongside any of the above. The Pipeline Reference page (`ui/howto_view.py`) is the primary place where the layer model is documented and shown to users. The PipelineManager gate ordering in `app.py` should be updated to reflect the 6-layer structure when the new gates are wired in.
 

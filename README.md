@@ -160,7 +160,7 @@ See **[docs/chatbot/ARCHITECTURE.md](docs/chatbot/ARCHITECTURE.md)** for a detai
 | [chatbot/ARCHITECTURE.md](docs/chatbot/ARCHITECTURE.md) | Pipeline internals, gate interface, design decisions |
 | [chatbot/ADVERSARIAL.md](docs/chatbot/ADVERSARIAL.md) | Gate bypass analysis, OWASP/MITRE mapping, attack chains, hardening playbook |
 
-### Agentic Security
+### Coding Agent Guard
 
 | Doc | Purpose |
 |:----|:--------|

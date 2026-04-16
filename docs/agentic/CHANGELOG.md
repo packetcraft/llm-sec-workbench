@@ -1,6 +1,6 @@
-# Agentic Security — Changelog
+# Coding Agent Guard — Changelog
 
-All notable changes to the Agentic Security Monitor will be documented in this file.
+All notable changes to the Coding Agent Guard will be documented in this file.
 
 ## [Unreleased] - 2026-04-15
 

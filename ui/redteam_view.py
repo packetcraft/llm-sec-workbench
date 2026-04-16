@@ -140,29 +140,48 @@ def _render_how_it_works() -> None:
         "measurement, and iterative AI-driven attack refinement."
     )
 
-    # ── Pipeline architecture diagram ─────────────────────────────────────────
-    pipeline_diagram = """
-    graph LR
-        A([User Prompt]) --> B[Input Gates x8]
-        B -->|BLOCK| C([Pipeline Halted])
-        B -->|all pass| D[LLM Inference]
-        D --> E[Output Gates x6]
-        E -->|BLOCK| F([Response Blocked])
-        E -->|all pass| G([Response Delivered])
-    """
+    # ── Pipeline architecture diagram (pure HTML/CSS — no external JS) ──────────
+    def _box(text: str, color: str, bg: str, border: str, radius: str = "8px") -> str:
+        return (
+            f"<div style='background:{bg};border:1px solid {border};"
+            f"border-radius:{radius};padding:8px 14px;color:{color};"
+            f"font-weight:700;font-size:0.78rem;text-align:center;white-space:nowrap'>"
+            f"{text}</div>"
+        )
+    def _arr(color: str = "#3a3a6a") -> str:
+        return f"<div style='color:{color};font-size:1rem;padding:0 2px'>&#8594;</div>"
+    def _darr(color: str = "#3a3a6a") -> str:
+        return f"<div style='text-align:center;color:{color};font-size:1rem;line-height:1;margin:2px 0'>&#9660;</div>"
+    def _conn() -> str:
+        return "<div style='width:2px;height:10px;background:#2a2a4a;margin:0 auto'></div>"
+
+    _block_badge = (
+        "<span style='background:#F7768E22;color:#F7768E;border:1px solid #F7768E44;"
+        "padding:1px 8px;border-radius:4px;font-size:0.65rem;font-weight:700;"
+        "white-space:nowrap'>&#8594; BLOCK</span>"
+    )
+
     st.html(
-        f"""
-        <div class="mermaid" style="display:flex;justify-content:center;">
-            {pipeline_diagram}
-        </div>
-        <script type="module">
-            import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
-            mermaid.initialize({{
-                startOnLoad: true, theme: 'dark',
-                flowchart: {{ useMaxWidth: true, htmlLabels: true, curve: 'basis' }}
-            }});
-        </script>
-        """
+        "<div style='display:flex;flex-direction:column;align-items:center;"
+        "gap:0;padding:12px 0'>"
+        + "<div style='display:flex;align-items:center;gap:6px'>"
+        + _box("User Prompt", "#cdd6f4", "#1e1e2e", "#3a3a5a", "20px")
+        + _arr()
+        + _box("Input Gates ×13", "#7AA2F7", "#0a1020", "#1a2a4a")
+        + _arr()
+        + _box("LLM Inference", "#BB9AF7", "#120a20", "#2a1a4a")
+        + _arr()
+        + _box("Output Gates ×8", "#7AA2F7", "#0a1020", "#1a2a4a")
+        + _arr()
+        + _box("Response", "#9ECE6A", "#0e1e0e", "#2d4a2d", "20px")
+        + "</div>"
+        + "<div style='display:flex;align-items:flex-start;gap:6px;margin-top:4px'>"
+        + "<div style='width:160px'></div>"
+        + "<div style='text-align:center;width:120px'>" + _block_badge + "</div>"
+        + "<div style='width:100px'></div>"
+        + "<div style='text-align:center;width:120px'>" + _block_badge + "</div>"
+        + "</div>"
+        + "</div>"
     )
 
     # ── Three operating modes ─────────────────────────────────────────────────
@@ -229,29 +248,61 @@ def _render_how_it_works() -> None:
         "([arXiv:2310.08419](https://arxiv.org/abs/2310.08419))"
     )
 
-    pair_diagram = """
-    graph LR
-        ATK([Attacker LLM]) -->|crafts prompt| PL[Input Gates]
-        PL -->|BLOCK| FB[Feedback]
-        PL -->|PASS| TGT([Target LLM])
-        TGT -->|response| JDG([Judge LLM])
-        JDG -->|score + reason| FB
-        FB -->|next iteration| ATK
-        JDG -->|score >= threshold| BR([BREACH])
-    """
+    # PAIR loop diagram — pure HTML/CSS
     st.html(
-        f"""
-        <div class="mermaid" style="display:flex;justify-content:center;">
-            {pair_diagram}
-        </div>
-        <script type="module">
-            import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
-            mermaid.initialize({{
-                startOnLoad: true, theme: 'dark',
-                flowchart: {{ useMaxWidth: true, htmlLabels: true, curve: 'basis' }}
-            }});
-        </script>
-        """
+        "<div style='display:flex;justify-content:center;padding:10px 0'>"
+        "<div style='border:1px solid #2a2a4a;border-radius:10px;padding:14px 20px;"
+        "background:#0d0d1a;width:min(640px,100%)'>"
+
+        # Top label
+        "<div style='font-size:0.6rem;font-weight:700;letter-spacing:0.1em;"
+        "text-transform:uppercase;color:#555566;margin-bottom:10px'>"
+        "PAIR — iterative loop</div>"
+
+        # Forward flow row
+        "<div style='display:flex;align-items:center;gap:5px;justify-content:center'>"
+        + _box("Attacker LLM", "#F7768E", "#200a0a", "#4a1a1a")
+        + "<div style='display:flex;flex-direction:column;align-items:center'>"
+        + "<div style='font-size:0.58rem;color:#555;white-space:nowrap'>crafts prompt</div>"
+        + "<div style='color:#3a3a6a;font-size:1rem'>&#8594;</div>"
+        + "</div>"
+        + _box("Input Gates", "#7AA2F7", "#0a1020", "#1a2a4a")
+        + "<div style='display:flex;flex-direction:column;align-items:center'>"
+        + "<div style='font-size:0.58rem;color:#555'>PASS</div>"
+        + "<div style='color:#3a3a6a;font-size:1rem'>&#8594;</div>"
+        + "</div>"
+        + _box("Target LLM", "#BB9AF7", "#120a20", "#2a1a4a")
+        + "<div style='display:flex;flex-direction:column;align-items:center'>"
+        + "<div style='font-size:0.58rem;color:#555'>response</div>"
+        + "<div style='color:#3a3a6a;font-size:1rem'>&#8594;</div>"
+        + "</div>"
+        + _box("Judge LLM", "#E0AF68", "#1a1200", "#4a3a00")
+        + "<div style='color:#3a3a6a;font-size:1rem;padding:0 2px'>&#8594;</div>"
+        + _box("BREACH", "#9ECE6A", "#0e1e0e", "#2d4a2d", "20px")
+        + "</div>"
+
+        # Feedback arc label row
+        + "<div style='display:flex;align-items:flex-start;gap:5px;"
+        "justify-content:center;margin-top:3px'>"
+        + "<div style='width:120px'></div>"
+        + "<div style='display:flex;flex-direction:column;align-items:center;width:90px'>"
+        + "<div style='color:#F7768E22;border-left:1px dashed #F7768E44;border-bottom:1px dashed #F7768E44;border-radius:0 0 0 6px;width:80px;height:18px'></div>"
+        + "<div style='font-size:0.58rem;color:#F7768E;white-space:nowrap'>BLOCK &#8594; feedback</div>"
+        + "</div>"
+        + "<div style='width:76px'></div>"
+        + "<div style='display:flex;flex-direction:column;align-items:center;width:110px'>"
+        + "<div style='border-right:1px dashed #E0AF6844;border-bottom:1px dashed #E0AF6844;border-radius:0 0 6px 0;width:96px;height:18px'></div>"
+        + "<div style='font-size:0.58rem;color:#E0AF68;white-space:nowrap;text-align:right'>score + reason &#8595;</div>"
+        + "</div>"
+        + "</div>"
+
+        # Feedback return row
+        + "<div style='text-align:center;margin-top:6px'>"
+        + "<span style='font-size:0.62rem;color:#555566'>"
+        + "&#8634; Judge score + block reason &#8594; Attacker adapts strategy &#8594; next iteration"
+        + "</span></div>"
+
+        + "</div></div>"
     )
 
     p1, p2, p3, p4 = st.columns(4)

@@ -15,6 +15,7 @@ METHOD_STYLES: dict[str, tuple[str, str]] = {
     "static": ("Static / Rules",  "#9ECE6A"),   # green  — no ML, < 1 ms
     "ml":     ("ML Model (CPU)", "#7AA2F7"),    # blue   — local model, ms range
     "llm":    ("LLM / Ollama",   "#BB9AF7"),    # purple — Ollama call, seconds
+    "cloud":  ("Cloud API",      "#FFB86C"),    # orange — outbound AIRS API call
 }
 
 # Ordered list of (gate_key, metadata) so the How It Works page preserves
@@ -204,6 +205,25 @@ GATE_INFO: dict[str, dict] = {
         "block_means": "Llama Guard 3 classified the prompt as unsafe (categories S1–S14).",
     },
 
+    "airs_inlet": {
+        "label":       "AIRS Inlet",
+        "category":    "Input",
+        "method":      "cloud",
+        "latency":     "0.5 – 2 s",
+        "description": (
+            "Cloud-tier prompt scan via Palo Alto Networks AI Runtime Security "
+            "(AIRS). Evaluates the user prompt against a configurable AI security "
+            "profile in Strata Cloud Manager. Covers threat categories not "
+            "detectable locally: URL reputation, IP reputation, agent system abuse, "
+            "and policy-defined custom rules. Requires an AIRS API key and outbound "
+            "HTTPS to Palo Alto Networks cloud. Degrades to SKIP when no key is "
+            "configured — all local gates run unaffected. "
+            "FAIL-CLOSED: API errors block in ENFORCE mode (vs. fail-open for all "
+            "local gates) — ensures misconfigured credentials surface immediately."
+        ),
+        "block_means": "AIRS cloud scan returned action=block for the user prompt.",
+    },
+
     # ── Output gates ──────────────────────────────────────────────────────────
 
     "sensitive_out": {
@@ -303,6 +323,25 @@ GATE_INFO: dict[str, dict] = {
         ),
         "block_means": "Passthrough only — restores redacted values, never blocks.",
     },
+
+    "airs_dual": {
+        "label":       "AIRS Dual",
+        "category":    "Output",
+        "method":      "cloud",
+        "latency":     "0.5 – 2 s",
+        "description": (
+            "Cloud-tier response scan via Palo Alto Networks AI Runtime Security "
+            "(AIRS). Evaluates the LLM response (with the original prompt as context) "
+            "against the configured AI security profile. Uniquely, AIRS can apply DLP "
+            "masking: when sensitive data is detected in the response, the gate "
+            "replaces the displayed text with an AIRS-redacted version — even when "
+            "the overall action is 'allow'. Covers response-side URL cats, DLP, "
+            "toxic content, database security risk, and hallucination/ungrounded flags. "
+            "Requires an AIRS API key. Degrades to SKIP when no key is configured. "
+            "FAIL-OPEN: API errors log an error metric but never suppress the response."
+        ),
+        "block_means": "AIRS cloud scan returned action=block for the LLM response.",
+    },
 }
 
 # Execution-ordered list of gate keys (matches pipeline construction in app.py)
@@ -311,9 +350,11 @@ INPUT_GATE_KEYS: list[str] = [
     "fast_scan", "gibberish", "language_in",
     "classify", "toxicity_in", "ban_topics",
     "semantic_guard", "little_canary", "mod_llm",
+    "airs_inlet",
 ]
 OUTPUT_GATE_KEYS: list[str] = [
     "sensitive_out", "malicious_urls", "no_refusal",
     "bias_out", "relevance", "language_same", "deanonymize",
+    "airs_dual",
 ]
 ALL_GATE_KEYS: list[str] = INPUT_GATE_KEYS + OUTPUT_GATE_KEYS

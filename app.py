@@ -14,7 +14,7 @@ Responsibilities
      - Required models absent    → First Run download screen
      - 🔧 Pipeline Reference      → ui/howto_view.py
      - 💬 Chat Workbench         → ui/chat_view.py
-     - 🛡️ Agentic Security       → ui/agentic_view.py
+     - 🛡️ Coding Agent Guard      → ui/agentic_view.py
      - ⚔️ Red Teaming            → ui/redteam_view.py
 
 Shared helpers
@@ -185,6 +185,24 @@ def _init_session_state(config: dict) -> None:
         # Risk score threshold 0–1; scores >= threshold trigger a block
         "little_canary_threshold": 0.6,
 
+        # ── AIRS (Layer 5 — Cloud) ────────────────────────────────────────────
+        # API key for Palo Alto Networks AIRS (x-pan-token).
+        # Priority: session state → AIRS_API_KEY env → PANW_API_KEY env.
+        # Placeholder values (starting with "your") are treated as absent.
+        # When no real key is found, both cloud gates degrade to SKIP.
+        "airs_api_key": (
+            os.getenv("AIRS_API_KEY", "").strip()
+            or os.getenv("PANW_API_KEY", "").strip()
+        ),
+        # AI security profile name configured in Strata Cloud Manager.
+        # Placeholder values fall back to "default" so a copied-but-not-edited
+        # .env does not send a meaningless profile name to the AIRS API.
+        "airs_profile": (
+            ""
+            if os.getenv("AIRS_PROFILE", "").strip().lower().startswith("your")
+            else os.getenv("AIRS_PROFILE", "").strip()
+        ) or "default",
+
         # Index into data/pair_goals.json for the preset dropdown.
         # None = not yet resolved; the view resolves it to the "Custom Goal…" entry.
         "pair_goal_preset_idx": None,
@@ -217,6 +235,7 @@ def _init_session_state(config: dict) -> None:
         "semantic_guard":  "AUDIT",    # Phase 4 — LLM Judge: General (configurable policy)
         "little_canary":   "AUDIT",    # Phase 4 — LLM Judge: General (behavioral canary probe)
         "mod_llm":         "AUDIT",    # Phase 4 — LLM Judge: Specialised (Llama Guard 3)
+        "airs_inlet":      "AUDIT",    # Phase 5 — Cloud: AIRS prompt scan (fail-closed)
         "sensitive_out":  "AUDIT",    # Phase 3 — Output-side PII scan (LLM-generated PII)
         "malicious_urls": "ENFORCE",  # Phase 3 — Malicious URL detection (output gate)
         "no_refusal":     "AUDIT",    # Phase 3 — Model refusal detection (output gate)
@@ -224,6 +243,7 @@ def _init_session_state(config: dict) -> None:
         "relevance":      "AUDIT",    # Phase 3 — Off-topic / hallucination (quality)
         "language_same":  "AUDIT",    # Phase 3 — Response language consistency (quality)
         "deanonymize":    "ENFORCE",  # Phase 3 — PII restoration (output gate)
+        "airs_dual":      "AUDIT",    # Phase 5 — Cloud: AIRS response scan + DLP masking
     }
     for gate_key, gate_default in gate_defaults.items():
         st.session_state.gate_modes.setdefault(gate_key, gate_default)
@@ -263,6 +283,7 @@ def _build_pipeline(config: dict, ollama_host: str, client):
         BanTopicsGate,
     )
     from gates.ollama_gates import LlamaGuardGate, SemanticGuardGate, LittleCanaryGate
+    from gates.cloud_gates import AIRSInletGate, AIRSDualGate
 
     thresholds = config.get("thresholds", {})
 
@@ -320,6 +341,11 @@ def _build_pipeline(config: dict, ollama_host: str, client):
                 "host":  ollama_host,
                 "model": config.get("models", {}).get("safety", "llama-guard3"),
             })),
+            ("airs_inlet",     AIRSInletGate(config={
+                "api_key":  st.session_state.get("airs_api_key", ""),
+                "profile":  st.session_state.get("airs_profile", "default"),
+                "ai_model": st.session_state.get("target_model", ""),
+            })),
         ],
         output_gates=[
             ("sensitive_out",  SensitiveGate(config={
@@ -341,6 +367,11 @@ def _build_pipeline(config: dict, ollama_host: str, client):
                 "threshold": thresholds.get("language_same", 0.1),
             })),
             ("deanonymize",    DeanonymizeGate(config={})),
+            ("airs_dual",      AIRSDualGate(config={
+                "api_key":  st.session_state.get("airs_api_key", ""),
+                "profile":  st.session_state.get("airs_profile", "default"),
+                "ai_model": st.session_state.get("target_model", ""),
+            })),
         ],
     )
 
@@ -384,21 +415,29 @@ def main() -> None:
             options=[
                 "🔧 Pipeline Reference",
                 "💬 Chat Workbench",
-                "🛡️ Agentic Security",
                 "⚔️ Red Teaming",
+                "🛡️ Coding Agent Guard",
             ],
             label_visibility="collapsed",
         )
         st.divider()
 
+    # Pipeline is rebuilt on every re-run so sidebar gate settings are live.
+    # Constructed before the Ollama guard so the Pipeline Reference page can
+    # show the full gate-control sidebar without requiring Ollama to be running.
+    # Gate objects are pure Python at construction — no network calls until scan().
+    pipeline = _build_pipeline(config, ollama_host, client)
+
     # ── Pages that don't need Ollama ──────────────────────────────────────────
-    if page == "🛡️ Agentic Security":
+    if page == "🛡️ Coding Agent Guard":
         from ui.agentic_view import render as render_agentic
         render_agentic(config)
         return
 
     if page == "🔧 Pipeline Reference":
+        from ui.chat_view import render_sidebar
         from ui.howto_view import render as render_howto
+        render_sidebar(pipeline, config)
         render_howto()
         return
 
@@ -419,9 +458,6 @@ def main() -> None:
     if missing:
         render_first_run(client, missing)
         return
-
-    # Pipeline is rebuilt on every re-run so sidebar gate settings are live.
-    pipeline = _build_pipeline(config, ollama_host, client)
 
     # ── Route: Red Teaming ────────────────────────────────────────────────────
     if page == "⚔️ Red Teaming":
