@@ -747,7 +747,7 @@ def _render_static(pipeline: "PipelineManager", config: dict) -> None:
 
         fire_clicked = st.button(
             "🔥 Fire Threat",
-            use_container_width=True,
+            width='stretch',
             type="primary",
             disabled=not example,
         )
@@ -1044,7 +1044,7 @@ def _render_export(result: dict) -> None:
             data=json_bytes,
             file_name=f"static_rt_{result.get('threat_id','run')}_{ts}.json",
             mime="application/json",
-            use_container_width=True,
+            width='stretch',
             key=f"dl_json_static_{ts}",
         )
     with dl_right:
@@ -1053,7 +1053,7 @@ def _render_export(result: dict) -> None:
             data=md_bytes,
             file_name=f"static_rt_{result.get('threat_id','run')}_{ts}.md",
             mime="text/markdown",
-            use_container_width=True,
+            width='stretch',
             key=f"dl_md_static_{ts}",
         )
 
@@ -1216,7 +1216,7 @@ def _render_batch(pipeline, config: dict) -> None:
             )
             col_a, col_b = st.columns([4, 1])
             col_a.caption(f"{n} imported threat(s) active this session.")
-            if col_b.button("Clear imported", use_container_width=True):
+            if col_b.button("Clear imported", width='stretch'):
                 st.session_state["batch_import_threats"] = []
                 st.rerun()
 
@@ -1243,7 +1243,7 @@ def _render_batch(pipeline, config: dict) -> None:
         key="batch_sev_all",
         disabled=running,
         type="primary" if all_active else "secondary",
-        use_container_width=True,
+        width='stretch',
     ):
         st.session_state["batch_severity_filter"] = list(all_severities)
         st.rerun()
@@ -1255,7 +1255,7 @@ def _render_batch(pipeline, config: dict) -> None:
             key=f"batch_sev_{sev}",
             disabled=running,
             type="primary" if is_on else "secondary",
-            use_container_width=True,
+            width='stretch',
         ):
             new_sevs = set(active_sevs)
             if is_on and len(new_sevs) > 1:
@@ -1273,14 +1273,14 @@ def _render_batch(pipeline, config: dict) -> None:
 
     active_cats = st.session_state.get("batch_category_filter")  # None = all
     tgl_col1, tgl_col2 = st.columns([1, 1])
-    if tgl_col1.button("All", key="batch_cat_all", disabled=running, use_container_width=True):
+    if tgl_col1.button("All", key="batch_cat_all", disabled=running, width='stretch'):
         st.session_state["batch_category_filter"] = None
         # Must also overwrite each checkbox's widget-state key directly —
         # Streamlit ignores value= once a key exists in session_state.
         for cat_id, _ in all_cats:
             st.session_state[f"batch_cat_{cat_id}"] = True
         st.rerun()
-    if tgl_col2.button("None", key="batch_cat_none", disabled=running, use_container_width=True):
+    if tgl_col2.button("None", key="batch_cat_none", disabled=running, width='stretch'):
         st.session_state["batch_category_filter"] = []
         for cat_id, _ in all_cats:
             st.session_state[f"batch_cat_{cat_id}"] = False
@@ -1346,7 +1346,7 @@ def _render_batch(pipeline, config: dict) -> None:
     with btn_l:
         start = st.button(
             f"▶ Run ({len(selected_threats)})",
-            use_container_width=True,
+            width='stretch',
             type="primary",
             disabled=running or not selected_threats,
             key="batch_run_btn",
@@ -1354,7 +1354,7 @@ def _render_batch(pipeline, config: dict) -> None:
     with btn_r:
         stop = st.button(
             "■ Stop",
-            use_container_width=True,
+            width='stretch',
             disabled=not running,
             key="batch_stop_btn",
         )
@@ -1758,7 +1758,7 @@ def _render_batch_export(results: list[dict], run_config: dict) -> None:
             data=json_bytes,
             file_name=f"batch_rt_{ts}.json",
             mime="application/json",
-            use_container_width=True,
+            width='stretch',
             key=f"batch_dl_json_{ts}",
         )
     with dl_r:
@@ -1767,7 +1767,7 @@ def _render_batch_export(results: list[dict], run_config: dict) -> None:
             data=md_bytes,
             file_name=f"batch_rt_{ts}.md",
             mime="text/markdown",
-            use_container_width=True,
+            width='stretch',
             key=f"batch_dl_md_{ts}",
         )
 
@@ -2004,14 +2004,14 @@ def _render_dynamic(pipeline: "PipelineManager", config: dict) -> None:
     with btn_col1:
         start_clicked = st.button(
             "▶ Start Probe",
-            use_container_width=True,
+            width='stretch',
             type="primary",
             disabled=running or not goal or not available_models,
         )
     with btn_col2:
         stop_clicked = st.button(
             "■ Stop",
-            use_container_width=True,
+            width='stretch',
             disabled=not running,
         )
 
@@ -2461,7 +2461,7 @@ def _render_pair_export(pair_log: list[dict], pair_config: dict) -> None:
             data=json_bytes,
             file_name=f"pair_run_{ts}.json",
             mime="application/json",
-            use_container_width=True,
+            width='stretch',
             key=f"pair_dl_json_{ts}",
         )
     with dl_r:
@@ -2470,6 +2470,6 @@ def _render_pair_export(pair_log: list[dict], pair_config: dict) -> None:
             data=md_bytes,
             file_name=f"pair_run_{ts}.md",
             mime="text/markdown",
-            use_container_width=True,
+            width='stretch',
             key=f"pair_dl_md_{ts}",
         )

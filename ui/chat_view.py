@@ -55,6 +55,17 @@ def _load_threats() -> list[dict]:
         return []
 
 
+@lru_cache(maxsize=1)
+def _load_rag_catalog() -> list[dict]:
+    """Load RAG dataset catalog from data/rag_catalog.json."""
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "rag_catalog.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+
 def _threat_options() -> tuple[list[str], dict[str, str]]:
     """Build the flat selectbox option list and a label→example mapping.
 
@@ -495,7 +506,7 @@ def _gate_row(gate_key: str, label: str, default: str, help_text: str) -> str:
     with col_info:
         info = GATE_INFO.get(gate_key)
         if info:
-            with st.popover("ⓘ", use_container_width=True):
+            with st.popover("ⓘ", width='stretch'):
                 method_key = info["method"]
                 method_lbl, method_color = METHOD_STYLES.get(method_key, ("", "#888"))
                 st.markdown(
@@ -589,7 +600,7 @@ def _render_sidebar(pipeline: "PipelineManager", config: dict) -> None:
         if st.session_state.demo_mode:
             _sb_section("SESSION")
             _render_demo_toggle()
-            if st.button("Clear Chat History", use_container_width=True):
+            if st.button("Clear Chat History", width='stretch'):
                 st.session_state.messages = []
                 st.rerun()
             return
@@ -616,6 +627,40 @@ def _render_sidebar(pipeline: "PipelineManager", config: dict) -> None:
             )
 
         with st.expander("📄 RAG / System Context", expanded=False):
+            # ── Dataset Selector ──────────────────────────────────────────────
+            rag_catalog = _load_rag_catalog()
+            if rag_catalog:
+                _cat_names = ["— CUSTOM / PASTE —"] + [d["name"] for d in rag_catalog]
+                _current_ds = st.session_state.get("rag_dataset_name", "— CUSTOM / PASTE —")
+                try:
+                    _cat_idx = _cat_names.index(_current_ds)
+                except ValueError:
+                    _cat_idx = 0
+
+                selected_ds_name = st.selectbox(
+                    "Load Dataset",
+                    _cat_names,
+                    index=_cat_idx,
+                    key="rag_dataset_select",
+                    label_visibility="collapsed",
+                )
+
+                if selected_ds_name != _current_ds:
+                    st.session_state.rag_dataset_name = selected_ds_name
+                    if selected_ds_name == "— CUSTOM / PASTE —":
+                        st.session_state.rag_context = ""
+                    else:
+                        ds = next(d for d in rag_catalog if d["name"] == selected_ds_name)
+                        # Load file content
+                        fpath = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ds["file"])
+                        try:
+                            with open(fpath, encoding="utf-8") as f:
+                                st.session_state.rag_context = f.read()
+                        except Exception as e:
+                            st.error(f"Error loading {ds['file']}: {e}")
+                    st.rerun()
+
+            # ── Content Editor ────────────────────────────────────────────────
             st.session_state.rag_context = st.text_area(
                 "rag_context_input",
                 value=st.session_state.get("rag_context", ""),
@@ -626,9 +671,26 @@ def _render_sidebar(pipeline: "PipelineManager", config: dict) -> None:
                     "so you can test indirect prompt injections hidden inside retrieved content."
                 ),
             )
-            if st.session_state.rag_context.strip():
+            
+            # ── Suggested Prompts ─────────────────────────────────────────────
+            if st.session_state.get("rag_context", "").strip():
                 _wc = len(st.session_state.rag_context.split())
                 st.caption(f"⚡ {_wc} words — active on next prompt")
+                
+                # Show suggestions if a dataset is selected
+                if st.session_state.get("rag_dataset_name", "") != "— CUSTOM / PASTE —":
+                    ds = next((d for d in rag_catalog if d["name"] == st.session_state.rag_dataset_name), None)
+                    if ds and ds.get("suggested_prompts"):
+                        st.markdown(
+                            "<div style='font-size:0.65rem;color:#7AA2F7;font-weight:700;"
+                            "margin:8px 0 4px;text-transform:uppercase;letter-spacing:0.05em'>"
+                            "Suggested Prompts</div>",
+                            unsafe_allow_html=True
+                        )
+                        for p in ds["suggested_prompts"]:
+                            if st.button(f"⚡ {p}", key=f"rag_p_{hash(p)}", width='stretch'):
+                                st.session_state.pending_prompt = p
+                                st.rerun()
 
         # ── INPUT GATES ───────────────────────────────────────────────────────
         with st.expander("Input Gates", expanded=False):
@@ -977,7 +1039,7 @@ def _render_sidebar(pipeline: "PipelineManager", config: dict) -> None:
         _sb_section("SESSION")
         _render_threat_panel()
         _render_demo_toggle()
-        if st.button("Clear Chat History", use_container_width=True):
+        if st.button("Clear Chat History", width='stretch'):
             st.session_state.messages = []
             st.rerun()
 
@@ -1828,12 +1890,12 @@ def _render_threat_panel() -> None:
         with s_col:
             send_clicked = st.button(
                 "Send →", key="inject_send_btn_sb",
-                use_container_width=True, type="primary",
+                width='stretch', type="primary",
             )
         with c_col:
             cancel_clicked = st.button(
                 "Cancel", key="inject_cancel_btn_sb",
-                use_container_width=True,
+                width='stretch',
             )
         if cancel_clicked:
             st.session_state.inject_prompt = ""
@@ -1850,7 +1912,7 @@ def _render_threat_panel() -> None:
             index=0,
             key="threat_select",
         )
-        if st.button("⚡ Inject threat", key="threat_inject_btn", use_container_width=True):
+        if st.button("⚡ Inject threat", key="threat_inject_btn", width='stretch'):
             st.session_state.inject_prompt = examples.get(selected, "")
             st.rerun()
 

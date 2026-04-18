@@ -949,7 +949,7 @@ def render_api_inspector(
                     data=json_bytes,
                     file_name=f"workbench_trace_{ts}.json",
                     mime="application/json",
-                    use_container_width=True,
+                    width='stretch',
                     key=f"dl_json_{key_id}",
                 )
             with exp_right:
@@ -958,7 +958,7 @@ def render_api_inspector(
                     data=md_bytes,
                     file_name=f"workbench_trace_{ts}.md",
                     mime="text/markdown",
-                    use_container_width=True,
+                    width='stretch',
                     key=f"dl_md_{key_id}",
                 )
             st.markdown(

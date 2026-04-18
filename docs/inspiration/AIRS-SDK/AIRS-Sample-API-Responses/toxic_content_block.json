@@ -1,0 +1,45 @@
+{
+  "action": "block",
+  "category": "malicious",
+  "error": false,
+  "errors": [],
+  "profile_id": "20d7a48a-3036-4d1b-9eaf-a3c5e168343b",
+  "profile_name": "ark-sec-profile",
+  "prompt_detected": {
+    "agent": true,
+    "dlp": false,
+    "injection": true,
+    "malicious_code": false,
+    "toxic_content": true,
+    "url_cats": false
+  },
+  "prompt_detection_details": {
+    "toxic_content_details": {
+      "toxic_categories": [
+        "Cybercrimes"
+      ]
+    }
+  },
+  "report_id": "Rc602844d-a9f3-4e4c-b475-0b288d214cb4",
+  "response_detected": {
+    "db_security": false,
+    "dlp": false,
+    "malicious_code": false,
+    "toxic_content": true,
+    "ungrounded": false,
+    "url_cats": false
+  },
+  "response_detection_details": {
+    "toxic_content_details": {
+      "toxic_categories": [
+        "Cybercrimes"
+      ]
+    }
+  },
+  "scan_id": "c602844d-a9f3-4e4c-b475-0b288d214cb4",
+  "session_id": "671b81f2-f48",
+  "source": "AI-Runtime-API",
+  "timeout": false,
+  "tool_detected": {},
+  "tr_id": "671b81f2-f48"
+}

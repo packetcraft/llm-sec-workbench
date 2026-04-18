@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "BeforeTool": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "name": "agentic-guard",
+            "type": "command",
+            "command": "python hooks/agentic_guard.py"
+          }
+        ]
+      }
+    ],
+    "AfterTool": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "name": "agentic-guard",
+            "type": "command",
+            "command": "python hooks/agentic_guard.py"
+          }
+        ]
+      }
+    ]
+  }
+}

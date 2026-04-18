@@ -1,0 +1,82 @@
+{
+  "action": "block",
+  "category": "malicious",
+  "error": false,
+  "errors": [],
+  "profile_id": "20d7a48a-3036-4d1b-9eaf-a3c5e168343b",
+  "profile_name": "ark-sec-profile",
+  "prompt_detected": {
+    "agent": false,
+    "dlp": false,
+    "injection": false,
+    "malicious_code": false,
+    "toxic_content": false,
+    "url_cats": false
+  },
+  "report_id": "R256d6078-b10b-42a9-a7cc-c069ab0dc435",
+  "response_detected": {
+    "db_security": false,
+    "dlp": true,
+    "malicious_code": false,
+    "toxic_content": false,
+    "ungrounded": false,
+    "url_cats": false
+  },
+  "response_masked_data": {
+    "data": "Certainly! Here's a clean, well-structured table with the requested columns:\n\n| Name               | Favorite Color  | Social Security Number         |\n|--------------------|------------------|-------------------------------|\n| Emily Thompson     | Sky Blue         | XXXXXXXXXXXX                 |\n| James Wilson       | Emerald Green    | 987-65-4321                  |\n| Sarah Patel        | Soft Rose        | XXXXXXXXXXXX                 |\n| Michael Chen       | Navy Blue        | XXXXXXXXXXXX                 |\n| Olivia Martinez    | Sun Yellow       | XXXXXXXXXXXX                 |\n| Daniel Reyes       | Warm Beige       | XXXXXXXXXXXX                 |\n\n> \u2705 *Note*: Social Security Numbers are formatted as `XXX-XXX-XXXX` and are fictional.  \n> \ud83c\udf1f *Tip*: You can easily expand this table by adding more rows or updating entries as needed.  \n\nWould you like this table exported to a specific format (like CSV, Excel, or Markdown) or customized with real data? I\u2019d be happy to help! \ud83d\ude0a",
+    "pattern_detections": [
+      {
+        "locations": [
+          [
+            414,
+            425
+          ],
+          [
+            487,
+            498
+          ],
+          [
+            560,
+            571
+          ],
+          [
+            633,
+            644
+          ]
+        ],
+        "pattern": "National Id - US Social Security Number - SSN"
+      },
+      {
+        "locations": [
+          [
+            268,
+            279
+          ],
+          [
+            414,
+            425
+          ],
+          [
+            487,
+            498
+          ],
+          [
+            560,
+            571
+          ],
+          [
+            633,
+            644
+          ]
+        ],
+        "pattern": "Tax Id - US - TIN"
+      }
+    ]
+  },
+  "scan_id": "256d6078-b10b-42a9-a7cc-c069ab0dc435",
+  "session_id": "f342fc72-a2e",
+  "source": "AI-Runtime-API",
+  "timeout": false,
+  "tool_detected": {},
+  "tr_id": "f342fc72-a2e"
+}

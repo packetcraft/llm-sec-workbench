@@ -1,0 +1,30 @@
+{
+  "_comment": "Replace this file with a real API response captured from the diagnostic filter.",
+  "_scenario": "Clean scan — no threats detected in prompt or response.",
+  "_prompt_used": "What is the capital of France?",
+  "scan_id": "",
+  "tr_id": "",
+  "action": "allow",
+  "prompt_detected": {
+    "injection": false,
+    "dlp": false,
+    "toxic_content": false,
+    "malicious_code": false,
+    "url_cats": false,
+    "agent": false,
+    "ungrounded": false,
+    "db_security": false
+  },
+  "prompt_detection_details": {},
+  "response_detected": {
+    "injection": false,
+    "dlp": false,
+    "toxic_content": false,
+    "malicious_code": false,
+    "url_cats": false,
+    "agent": false,
+    "ungrounded": false,
+    "db_security": false
+  },
+  "response_detection_details": {}
+}
