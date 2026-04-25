@@ -239,6 +239,22 @@ GATE_INFO: dict[str, dict] = {
         "block_means": "PII was detected in the model's response.",
     },
 
+    "canary_token": {
+        "label":       "Canary Tokens",
+        "category":    "Output",
+        "method":      "static",
+        "latency":     "< 1 ms",
+        "description": (
+            "Scans the LLM response for predefined sensitive strings (canary tokens) "
+            "such as internal IP addresses, mock API keys, or project codenames. "
+            "Zero ML — pure Python exact matching. This is a critical defense "
+            "against Data Exfiltration and Indirect Prompt Injection (IPI) "
+            "where an attacker tries to trick the model into leaking retrieved "
+            "data from a RAG store."
+        ),
+        "block_means": "A sensitive canary token was detected in the model's response.",
+    },
+
     "malicious_urls": {
         "label":       "Malicious URLs",
         "category":    "Output",
@@ -353,7 +369,7 @@ INPUT_GATE_KEYS: list[str] = [
     "airs_inlet",
 ]
 OUTPUT_GATE_KEYS: list[str] = [
-    "sensitive_out", "malicious_urls", "no_refusal",
+    "sensitive_out", "canary_token", "malicious_urls", "no_refusal",
     "bias_out", "relevance", "language_same", "deanonymize",
     "airs_dual",
 ]

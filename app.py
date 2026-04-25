@@ -89,6 +89,28 @@ def _build_client(host: str, model: str):
     return OllamaClient(model=model, host=host)
 
 
+@st.cache_resource
+def _build_vector_store(ollama_host: str, embed_model: str, collection_name: str, chunk_size: int, chunk_overlap: int, top_k: int):
+    """Instantiate and cache the ChromaDB VectorStore.
+
+    Returns None if chromadb is not installed. The returned object is
+    intentionally mutable — index_document() calls from the UI accumulate
+    across reruns because @st.cache_resource returns the same instance.
+    """
+    try:
+        from core.vector_store import VectorStore
+        return VectorStore(
+            ollama_host=ollama_host,
+            embed_model=embed_model,
+            collection_name=collection_name,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            top_k=top_k,
+        )
+    except ImportError:
+        return None
+
+
 # ── Session state initialisation ──────────────────────────────────────────────
 
 def _init_session_state(config: dict) -> None:
@@ -112,6 +134,10 @@ def _init_session_state(config: dict) -> None:
 
         # RAG simulation (Section 9.5)
         "rag_context": "",
+
+        # ChromaDB semantic RAG (OMAHA Stage 2)
+        "chroma_mode": False,            # True = semantic retrieval; False = classic paste
+        "chroma_retrieval_info": [],     # last retrieved chunks (for telemetry display)
 
         # Hot-Patching (Section 9.5) — wired to RegexGate in Phase 2
         "custom_block_phrases": "",
@@ -237,6 +263,7 @@ def _init_session_state(config: dict) -> None:
         "mod_llm":         "AUDIT",    # Phase 4 — LLM Judge: Specialised (Llama Guard 3)
         "airs_inlet":      "AUDIT",    # Phase 5 — Cloud: AIRS prompt scan (fail-closed)
         "sensitive_out":  "AUDIT",    # Phase 3 — Output-side PII scan (LLM-generated PII)
+        "canary_token":   "AUDIT",    # OMAHA Stage 1 — Canary token detection
         "malicious_urls": "ENFORCE",  # Phase 3 — Malicious URL detection (output gate)
         "no_refusal":     "AUDIT",    # Phase 3 — Model refusal detection (output gate)
         "bias_out":       "AUDIT",    # Phase 3 — Biased/toxic output (quality)
@@ -284,10 +311,12 @@ def _build_pipeline(config: dict, ollama_host: str, client):
     )
     from gates.ollama_gates import LlamaGuardGate, SemanticGuardGate, LittleCanaryGate
     from gates.cloud_gates import AIRSInletGate, AIRSDualGate
+    from gates.output.canary_token import CanaryTokenGate
 
     thresholds = config.get("thresholds", {})
 
     _raw_topics = st.session_state.get("ban_topics_list", "")
+    _canary_tokens = config.get("security", {}).get("canary_tokens", [])
 
     return PipelineManager(
         client=client,
@@ -351,6 +380,9 @@ def _build_pipeline(config: dict, ollama_host: str, client):
             ("sensitive_out",  SensitiveGate(config={
                 "pii_threshold": st.session_state.get("pii_threshold", 0.7),
             })),
+            ("canary_token",   CanaryTokenGate(config={
+                "tokens": _canary_tokens,
+            })),
             ("malicious_urls", MaliciousURLsGate(config={
                 "threshold": thresholds.get("malicious_urls", 0.5),
             })),
@@ -388,6 +420,20 @@ def main() -> None:
         config.get("models", {}).get("target", "llama3"),
     )
     client = _build_client(host=ollama_host, model=target_model)
+
+    # ── ChromaDB VectorStore (OMAHA Stage 2) ──────────────────────────────────
+    _rag_cfg = config.get("rag", {})
+    vector_store = _build_vector_store(
+        ollama_host=ollama_host,
+        embed_model=_rag_cfg.get("embed_model", "nomic-embed-text"),
+        collection_name=_rag_cfg.get("collection_name", "rag_docs"),
+        chunk_size=int(_rag_cfg.get("chunk_size", 200)),
+        chunk_overlap=int(_rag_cfg.get("chunk_overlap", 40)),
+        top_k=int(_rag_cfg.get("top_k", 3)),
+    )
+    # Store as a session-state reference so chat_view.py can access it without
+    # parameter threading through every private render function.
+    st.session_state["_vector_store"] = vector_store
 
     # ── Top-level navigation ──────────────────────────────────────────────────
     with st.sidebar:
