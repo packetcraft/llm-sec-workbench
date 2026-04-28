@@ -491,6 +491,7 @@ def _inject_sidebar_css() -> None:
             padding-bottom: 0 !important;
         }
         section[data-testid="stSidebar"] .stSelectbox,
+        section[data-testid="stSidebar"] .stSegmentedControl,
         section[data-testid="stSidebar"] .stSlider,
         section[data-testid="stSidebar"] .stTextInput,
         section[data-testid="stSidebar"] .stTextArea,
@@ -498,24 +499,107 @@ def _inject_sidebar_css() -> None:
             margin-bottom: 2px !important;
             padding-bottom: 0 !important;
         }
-        /* Reduce gap inside the horizontal column pairs (gate label + selectbox) */
+        /* Reduce gap inside the horizontal column pairs (gate label + pills) */
         section[data-testid="stSidebar"] [data-testid="stHorizontalBlock"] {
             gap: 4px !important;
         }
 
-        /* ── Selectbox open-menu option height ────────────────────────── */
-        /* Tighten the dropdown list items so opening a select doesn't     */
-        /* push half the sidebar off-screen.                               */
-        [data-baseweb="menu"] [role="option"] {
-            min-height: 28px !important;
-            padding-top: 4px !important;
-            padding-bottom: 4px !important;
-            font-size: 0.72rem !important;
+        /* ── Gate pill selectors (segmented_control) ─────────────────── */
+
+        /* Fit-content pills — each pill sizes to its text */
+        section[data-testid="stSidebar"] [data-baseweb="button-group"] {
+            display: inline-flex !important;
+            width: auto !important;
+            gap: 2px !important;
         }
-        /* Also fix the popover/menu list padding */
-        [data-baseweb="menu"] ul {
-            padding-top: 2px !important;
-            padding-bottom: 2px !important;
+        section[data-testid="stSidebar"] [data-baseweb="button-group"] button {
+            flex: 0 0 auto !important;
+            justify-content: center !important;
+            font-size: 0.67rem !important;
+            padding: 2px 8px !important;
+            min-width: 0 !important;
+            min-height: 24px !important;
+            height: 24px !important;
+            line-height: 1 !important;
+            white-space: nowrap !important;
+        }
+
+        /* Semantic active-pill colors: Off(1) · Audit(2) · Enforce(3)
+           Target all aria attributes BaseWeb/Streamlit may use */
+        section[data-testid="stSidebar"] [data-baseweb="button-group"] button:nth-child(1)[aria-checked="true"],
+        section[data-testid="stSidebar"] [data-baseweb="button-group"] button:nth-child(1)[aria-pressed="true"],
+        section[data-testid="stSidebar"] [data-baseweb="button-group"] button:nth-child(1)[aria-selected="true"],
+        section[data-testid="stSidebar"] [data-baseweb="button-group"] button:nth-child(1)[data-selected="true"] {
+            background: rgba(85,85,102,0.35) !important;
+            background-color: rgba(85,85,102,0.35) !important;
+            color: #888899 !important;
+            border-color: #555566 !important;
+        }
+        section[data-testid="stSidebar"] [data-baseweb="button-group"] button:nth-child(2)[aria-checked="true"],
+        section[data-testid="stSidebar"] [data-baseweb="button-group"] button:nth-child(2)[aria-pressed="true"],
+        section[data-testid="stSidebar"] [data-baseweb="button-group"] button:nth-child(2)[aria-selected="true"],
+        section[data-testid="stSidebar"] [data-baseweb="button-group"] button:nth-child(2)[data-selected="true"] {
+            background: rgba(224,175,104,0.25) !important;
+            background-color: rgba(224,175,104,0.25) !important;
+            color: #E0AF68 !important;
+            border-color: rgba(224,175,104,0.7) !important;
+        }
+        section[data-testid="stSidebar"] [data-baseweb="button-group"] button:nth-child(3)[aria-checked="true"],
+        section[data-testid="stSidebar"] [data-baseweb="button-group"] button:nth-child(3)[aria-pressed="true"],
+        section[data-testid="stSidebar"] [data-baseweb="button-group"] button:nth-child(3)[aria-selected="true"],
+        section[data-testid="stSidebar"] [data-baseweb="button-group"] button:nth-child(3)[data-selected="true"] {
+            background: rgba(247,118,142,0.22) !important;
+            background-color: rgba(247,118,142,0.22) !important;
+            color: #F7768E !important;
+            border-color: rgba(247,118,142,0.7) !important;
+        }
+
+        /* Dim pills column when gate is OFF — marker div precedes the widget */
+        [data-testid="element-container"]:has(.gate-pills-off) ~ [data-testid="element-container"] [data-baseweb="button-group"] {
+            opacity: 0.38 !important;
+            pointer-events: none !important;
+        }
+
+        /* ── Threat panel — staged textarea amber left-border ─────────── */
+        [data-testid="element-container"]:has(.threat-stage-ctx) ~ [data-testid="element-container"] textarea {
+            border-left: 3px solid rgba(224,175,104,0.55) !important;
+            border-radius: 4px !important;
+        }
+
+        /* ── Primary buttons in sidebar → amber (Send + Inject threat) ── */
+        section[data-testid="stSidebar"] [data-testid="baseButton-primary"] {
+            background-color: #E0AF68 !important;
+            background:       #E0AF68 !important;
+            border-color:     #C89A50 !important;
+            color:            #1a1a2e !important;
+        }
+        section[data-testid="stSidebar"] [data-testid="baseButton-primary"]:hover {
+            background-color: #C89A50 !important;
+            background:       #C89A50 !important;
+        }
+
+        /* Gate ⓘ popover button — borderless icon, no chevron */
+        section[data-testid="stSidebar"] [data-testid="stPopover"] button {
+            white-space: nowrap !important;
+            overflow: hidden !important;
+            padding: 2px 4px !important;
+            font-size: 0.72rem !important;
+            line-height: 1.2 !important;
+            background: transparent !important;
+            background-color: transparent !important;
+            border: none !important;
+            box-shadow: none !important;
+            color: #666688 !important;
+        }
+        section[data-testid="stSidebar"] [data-testid="stPopover"] button:hover {
+            color: #cdd6f4 !important;
+            background: transparent !important;
+        }
+        section[data-testid="stSidebar"] [data-testid="stPopover"] button svg,
+        section[data-testid="stSidebar"] [data-testid="stPopover"] svg,
+        section[data-testid="stSidebar"] [data-testid="stPopover"] button [aria-hidden="true"],
+        section[data-testid="stSidebar"] [data-testid="stPopover"] button > div > *:last-child:not(p):not(span:first-child) {
+            display: none !important;
         }
         </style>
         """,
@@ -534,31 +618,40 @@ def _sb_section(title: str) -> None:
 
 
 _MODE_OPTIONS = ["OFF", "AUDIT", "ENFORCE"]
+_MODE_LABELS  = ["Off", "Audit", "Enforce"]
 _MODE_COLORS  = {"OFF": "#555566", "AUDIT": "#E0AF68", "ENFORCE": "#F7768E"}
+_TO_LABEL     = {"OFF": "Off", "AUDIT": "Audit", "ENFORCE": "Enforce"}
+_FROM_LABEL   = {"Off": "OFF", "Audit": "AUDIT", "Enforce": "ENFORCE"}
 
 
 def _gate_row(gate_key: str, label: str, default: str, help_text: str) -> str:
-    """Render a compact gate-mode row (label + selectbox + ⓘ popover) and return the chosen mode."""
+    """Render a compact gate-mode row (label + pill selector + ⓘ popover) and return the chosen mode."""
     from ui.gate_info import GATE_INFO, METHOD_STYLES
 
     current = st.session_state.gate_modes.get(gate_key, default)
-    col_lbl, col_sel, col_info = st.columns([2, 3, 1])
+    col_lbl, col_sel, col_info = st.columns([2, 6, 1])
     with col_lbl:
         color = _MODE_COLORS[current]
+        opacity = "0.45" if current == "OFF" else "1.0"
         st.markdown(
-            f"<div style='font-size:0.72rem;color:#cdd6f4;padding-top:6px'>"
+            f"<div style='font-size:0.72rem;color:#cdd6f4;padding-top:6px;"
+            f"white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:{opacity}'>"
             f"<span style='color:{color}'>●</span> {label}</div>",
             unsafe_allow_html=True,
         )
     with col_sel:
-        new_mode = st.selectbox(
+        if current == "OFF":
+            st.markdown('<div class="gate-pills-off"></div>', unsafe_allow_html=True)
+        seg_key = f"gate_seg_{gate_key}"
+        sel_label = st.segmented_control(
             label,
-            _MODE_OPTIONS,
-            index=_MODE_OPTIONS.index(current),
+            options=_MODE_LABELS,
+            default=_TO_LABEL[current],
             label_visibility="collapsed",
             help=help_text,
-            key=f"gate_sel_{gate_key}",
+            key=seg_key,
         )
+        new_mode: str = _FROM_LABEL.get(sel_label or "", str(current))
     with col_info:
         info = GATE_INFO.get(gate_key)
         if info:
@@ -579,6 +672,11 @@ def _gate_row(gate_key: str, label: str, default: str, help_text: str) -> str:
                 )
                 st.markdown(info["description"])
                 st.caption(f"**BLOCK means:** {info['block_means']}")
+
+    st.markdown(
+        "<div style='border-bottom:1px solid rgba(255,255,255,0.05);margin:1px 0 2px'></div>",
+        unsafe_allow_html=True,
+    )
 
     if new_mode != current:
         st.session_state.gate_modes[gate_key] = new_mode
@@ -1288,14 +1386,14 @@ def _render_sidebar(pipeline: "PipelineManager", config: dict) -> None:
             _has_key = bool(st.session_state.get("airs_api_key", ""))
             if _has_key:
                 st.markdown(
-                    "<div style='font-size:0.68rem;color:#9ECE6A;padding:2px 0'>"
-                    "✓ API key configured — cloud gates active when enabled</div>",
+                    "<div style='font-size:0.68rem;color:#9ECE6A;padding:2px 0 4px'>"
+                    "✓ Key set — gates active</div>",
                     unsafe_allow_html=True,
                 )
             else:
                 st.markdown(
-                    "<div style='font-size:0.68rem;color:#555566;padding:2px 0'>"
-                    "⚠ No API key — both gates will SKIP (set AIRS_API_KEY in .env)</div>",
+                    "<div style='font-size:0.68rem;color:#555566;padding:2px 0 4px'>"
+                    "⚠ No key — set AIRS_API_KEY in .env</div>",
                     unsafe_allow_html=True,
                 )
 
@@ -2235,6 +2333,7 @@ def _render_threat_panel() -> None:
             "⚡ THREAT STAGED — edit if needed</div>",
             unsafe_allow_html=True,
         )
+        st.markdown('<div class="threat-stage-ctx"></div>', unsafe_allow_html=True)
         edited = st.text_area(
             "staged_threat_sb",
             value=st.session_state.inject_prompt,
@@ -2262,13 +2361,20 @@ def _render_threat_panel() -> None:
             st.rerun()
     else:
         # ── Default state — select + inject button ─────────────────────────
+        st.markdown(
+            "<div style='font-size:0.65rem;color:#888899;font-weight:700;"
+            "letter-spacing:0.10em;margin:6px 0 4px'>INSERT THREAT</div>",
+            unsafe_allow_html=True,
+        )
+        st.markdown('<div class="threat-inject-ctx"></div>', unsafe_allow_html=True)
         selected = st.selectbox(
             "INSERT THREAT",
             options,
             index=0,
             key="threat_select",
+            label_visibility="collapsed",
         )
-        if st.button("⚡ Inject threat", key="threat_inject_btn", width='stretch'):
+        if st.button("⚡ Inject threat", key="threat_inject_btn", width='stretch', type="primary"):
             st.session_state.inject_prompt = examples.get(selected, "")
             st.rerun()
 
